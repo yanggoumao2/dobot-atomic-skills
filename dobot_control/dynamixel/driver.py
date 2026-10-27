@@ -113,7 +113,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
         self._append_id = append_id
         self.using_sensor = using_sensor
         self._joint_angles = None
-        self._joint_keys = np.zeros(3)  # add 2 keys
+        self._joint_keys = None  # no synthetic button state before first valid reply
+        self._keys_updated_at = None
         self._lock = Lock()
 
         # Initialize the port handler, packet handler, and group sync read/write
@@ -157,12 +158,12 @@ class DynamixelDriver(DynamixelDriverProtocol):
     def _internal_getKey(self):
         txBuf = [0xAA, 0x55, 0xAA]
         self._portHandler.writePort(txBuf)
-        self._portHandler.setPacketTimeout(2)
         rxpacket = []
         if self.using_sensor:
             waitLen = 4
         else:
             waitLen = 2
+        self._portHandler.setPacketTimeout(waitLen)
         while True:
             rxpacket.extend(self._portHandler.readPort(2))
             rx_length = len(rxpacket)
@@ -170,6 +171,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
                 break
             if self._portHandler.isPacketTimeout():
                 break
+        if len(rxpacket) != waitLen:
+            return None
         if self.using_sensor:
             flag_in = ((rxpacket[0] + rxpacket[1] + rxpacket[2] + rxpacket[3]) == 255*2 )
         else:
@@ -180,7 +183,7 @@ class DynamixelDriver(DynamixelDriverProtocol):
             else:
                 return [(rxpacket[0] >> 4) & 0b1111, rxpacket[0] & 0b00001111, 0]
 
-        return []
+        return None
 
     def set_joints(self, joint_angles: Sequence[float]):
         if len(joint_angles) != len(self._ids):
@@ -272,6 +275,7 @@ class DynamixelDriver(DynamixelDriverProtocol):
                 keys = self._internal_getKey()
                 if keys is not None:
                     self._joint_keys = keys
+                    self._keys_updated_at = time.monotonic()
             # self._groupSyncRead.clearParam() # TODO what does this do? should i add it
 
     def get_joints(self) -> np.ndarray:
@@ -289,13 +293,25 @@ class DynamixelDriver(DynamixelDriverProtocol):
         self._portHandler.closePort()
 
     def get_keys(self) -> np.ndarray:
-        # Return a copy of the joint_angles array to avoid race conditions
-        while self._joint_keys is None:
+        # A short invalid packet must not overwrite a valid three-field state.
+        # Nor may a disconnected hand leave an old "servo on" state forever.
+        deadline = time.monotonic() + 1.0
+        while True:
+            if not self._reading_thread.is_alive():
+                raise RuntimeError("Master serial reader stopped; button state unavailable")
+            with self._lock:
+                key = None if self._joint_keys is None else np.asarray(self._joint_keys).copy()
+                updated_at = self._keys_updated_at
+            now = time.monotonic()
+            if key is not None:
+                if key.shape != (3,) or not np.isfinite(key).all():
+                    raise RuntimeError("Invalid master button state: expected three finite values")
+                if updated_at is None or now - updated_at > 0.25:
+                    raise RuntimeError("Master button state stale for more than 250 ms")
+                return key
+            if now >= deadline:
+                raise RuntimeError("No valid master button reply within 1 second")
             time.sleep(0.01)
-        with self._lock:
-            key = self._joint_keys.copy()
-        # log_write(__file__, "ButtonA: ["+str(key)+"] unlock")
-        return key
 
     # set p
     def set_joint_arg_2Byte(self, _id, addr, val):

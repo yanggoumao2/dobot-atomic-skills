@@ -19,11 +19,12 @@ from scripts.function_util import mismatch_data_write, wait_period, log_write, m
 from scripts.manipulate_utils import robot_pose_init, pose_check, dynamic_approach, obs_action_check, servo_action_check, master_to_nova_action, master_to_nova_flags, master_to_nova_gripper_flags, apply_same_side_gripper_targets, load_ini_data_hands, set_light, load_ini_data_camera
 from dobot_control.agents.dobot_agent import DobotAgent
 from dobot_control.cameras.realsense_camera import RealSenseCamera
+from dobot_control.cameras.settings import CAMERA_NAMES, load_camera_settings
 from dobot_control.async_writer import BoundedAsyncWriter
+from dobot_control.absolute_teleop import AbsoluteTeleopPlanner, CommandInterval
 from dobot_control.teleop_safety import (
     MasterRunawayGuard,
     check_pose_protection,
-    consume_servo_warmup,
 )
 import datetime
 from pathlib import Path
@@ -106,14 +107,34 @@ def close_record_writer(record_writer):
         print(f"[RECORD] writer shutdown failed: {type(exc).__name__}: {exc}", flush=True)
 
 
-def button_monitor_realtime(agent):
+def run_button_monitor_guarded(agent, failure_event, stop_event, ready_event, errors):
+    try:
+        button_monitor_realtime(agent, stop_event, ready_event)
+        if not stop_event.is_set():
+            raise RuntimeError("Button monitor exited unexpectedly")
+    except BaseException as exc:
+        errors.append(f"{type(exc).__name__}: {exc}")
+        failure_event.set()  # publish failure before logging or any cleanup
+        what_to_do[:, 1:] = 0
+        runtime_log("BUTTON_MONITOR_FAILURE", error=errors[-1])
+
+
+def require_button_monitor_healthy(thread, failure_event, errors):
+    if failure_event.is_set() or not thread.is_alive():
+        what_to_do[:, 1:] = 0
+        detail = errors[-1] if errors else "button thread is not running"
+        raise RuntimeError(f"Button monitoring unavailable; stop teleoperation: {detail}")
+
+
+def button_monitor_realtime(agent, stop_event, ready_event):
     # servo
-    last_keys_status = np.array(([0, 0, 0], [0, 0, 0]))
+    last_keys_status = None
+    press_started_at = np.zeros(2)
     start_press_status = np.array(([0, 0], [0, 0]))  # start press
     keys_press_count = np.array(([0, 0, 0], [0, 0, 0]))
     reset_generation = int(_button_state_reset_generation[0])
 
-    while not is_falling[0]:
+    while not stop_event.is_set() and not is_falling[0]:
         # Keep button-thread edge counters synchronized with control-loop
         # fault recovery. Otherwise a forced servo-off leaves odd/even counts
         # stale and the next press appears to do nothing.
@@ -125,16 +146,20 @@ def button_monitor_realtime(agent):
             runtime_log("BUTTON_STATE_RESET", generation=reset_generation)
         # time.sleep(0.010)
         now_keys = agent.get_keys()
+        if last_keys_status is None:
+            last_keys_status = now_keys.copy()
+            ready_event.set()
+            continue  # first sample is a baseline, not a button edge
         dev_keys = now_keys - last_keys_status
         # button a
         for i in range(2):
             if dev_keys[i, 0] == -1:  # button a: start
-                tic = time.time()
+                press_started_at[i] = time.monotonic()
                 start_press_status[i, 0] = 1
             if dev_keys[i, 0] == 1 and start_press_status[i, 0]:  # button a: end
                 start_press_status[i, 0] = 0
-                toc = time.time()
-                if toc-tic < 0.5:
+                held_seconds = time.monotonic() - press_started_at[i]
+                if held_seconds < 0.5:
                     keys_press_count[i, 0] += 1
                     if keys_press_count[i, 0] % 2 == 1:
                         what_to_do[i, 0] = 1
@@ -143,7 +168,7 @@ def button_monitor_realtime(agent):
                         what_to_do[i, 0] = 0
                         runtime_log("BUTTON_A_SHORT", hand=i, action="lock", state=what_to_do.copy())
 
-                elif toc-tic > 1:
+                elif held_seconds > 1:
                     keys_press_count[i, 1] += 1
                     if keys_press_count[i, 1] % 2 == 1:
                         what_to_do[i, 1] = 1
@@ -180,6 +205,7 @@ def button_monitor_realtime(agent):
                     is_falling[0] = 1
 
         last_keys_status = now_keys
+        stop_event.wait(0.005)
 
 
 # Thread: camera
@@ -222,6 +248,42 @@ def run_thread_cam(rs_cam, which_cam, ready_event, failure_event, stop_event):
                 return
             time.sleep(0.1)
 
+
+
+def start_configured_cameras(settings):
+    """Start only selected views; fail before constructing any robot/hand."""
+    cameras, threads, ready_events = {}, {}, []
+    stop_event, failure_event = threading.Event(), threading.Event()
+
+    def close():
+        stop_event.set()
+        for thread in threads.values():
+            thread.join(timeout=6.0)
+        for camera in cameras.values():
+            camera.close()
+
+    try:
+        for name, serial in settings.serials.items():
+            camera = RealSenseCamera(device_id=serial, flip=name != "left", fps=settings.fps)
+            cameras[name] = camera
+            ready = threading.Event()
+            ready_events.append(ready)
+            thread = threading.Thread(target=run_thread_cam,
+                                      args=(camera, CAMERA_NAMES.index(name), ready,
+                                            failure_event, stop_event), daemon=True)
+            threads[name] = thread
+            thread.start()
+        deadline = time.monotonic() + CAMERA_STARTUP_TIMEOUT_S
+        while not all(event.is_set() for event in ready_events):
+            if failure_event.is_set() or time.monotonic() >= deadline:
+                raise RuntimeError("Enabled cameras did not deliver frames before startup deadline")
+            time.sleep(0.05)
+        if failure_event.is_set() or not all(t.is_alive() for t in threads.values()):
+            raise RuntimeError("Enabled camera stream failed during startup")
+    except BaseException:
+        close()
+        raise
+    return threads, failure_event, stop_event, close
 
 
 def dh_transformation_matrix(theta, d, a, alpha):
@@ -304,6 +366,80 @@ def calculate_vel_pos(action, last_action, total_time, r_type):
             vel[f'{side}_{paw}'] = (current_fk - last_fk) / total_time
 
     return positions, vel
+
+def limit_tcp_descent(action, previous, elapsed, robot_type, flags, limit=1.0):
+    """Reduce proposed steps rather than unlatching servo on speed alone.
+
+    The final workspace/velocity checker still independently checks the result.
+    This is commanded FK velocity, not measured physical TCP velocity.
+    """
+    result = np.asarray(action, dtype=float).copy()
+    previous = np.asarray(previous, dtype=float)
+    limited = []
+    for side, name in enumerate(("left", "right")):
+        if not flags[side]:
+            continue
+        def downward(candidate):
+            _, velocities = calculate_vel_pos(candidate, previous, elapsed, robot_type)
+            return max(0.0, -float(velocities[f"{name}_left"][2]),
+                       -float(velocities[f"{name}_right"][2]))
+        before = downward(result)
+        if before <= limit:
+            continue
+        arm = slice(side * 7, side * 7 + 6)
+        delta = result[arm] - previous[arm]
+        low, high = 0.0, 1.0
+        for _ in range(16):
+            middle = (low + high) / 2.0
+            candidate = result.copy()
+            candidate[arm] = previous[arm] + delta * middle
+            if downward(candidate) <= limit * 0.95:
+                low = middle
+            else:
+                high = middle
+        result[arm] = previous[arm] + delta * low
+        limited.append({"side": name, "before_m_s": before,
+                        "after_m_s": downward(result), "scale": low})
+    return result, limited
+
+
+def validate_absolute_alignment(current, target, robot_type, flags, joint_step=0.01):
+    """Sample the enable-time straight joint path; runtime guards still apply."""
+    current, target = map(AbsoluteTeleopPlanner.vector, (current, target))
+    flags = np.asarray(flags, dtype=bool)
+    if flags.shape != (2,):
+        raise ValueError("Expected two Nova flags")
+    if not np.isfinite(joint_step) or joint_step <= 0:
+        raise ValueError("Positive finite sampling step required")
+    target = target.copy()
+    for side in range(2):
+        if not flags[side]:
+            target[side*7:side*7+7] = current[side*7:side*7+7]
+        # Grippers do not move during alignment.
+        target[side*7+6] = current[side*7+6]
+    delta = target - current
+    samples = max(2, int(np.ceil(np.max(np.abs(delta))/joint_step)) + 1)
+    for index, fraction in enumerate(np.linspace(0.0, 1.0, samples)):
+        sample = current + delta * fraction
+        positions, velocities = calculate_vel_pos(sample, sample, 1.0, robot_type)
+        positions_mm = {key: value * 1000 for key, value in positions.items()}
+        for side, name, x_range in ((0,"left",(-450,300)), (1,"right",(-250,450))):
+            if not flags[side]:
+                continue
+            for tip in (f"{name}_left", f"{name}_right"):
+                p = positions_mm[tip]
+                if not (x_range[0] <= p[0] <= x_range[1]
+                        and -750 <= p[1] <= -160 and p[2] > 40):
+                    return False, {"sample":index, "samples":samples,
+                                   "fraction":float(fraction), "nova_side":name,
+                                   "tip":tip, "position_mm":p.tolist(),
+                                   "target":target.tolist()}
+        if check_joint_safety(sample, flags):
+            return False, {"sample":index, "samples":samples,
+                           "fraction":float(fraction), "reason":"joint_safety",
+                           "target":target.tolist()}
+    return True, {"samples":samples, "target":target.tolist()}
+
 
 def check_joint_safety(action, flag_in=None):
     """Check J3 signs only for the follower half that is actually active.
@@ -389,45 +525,31 @@ def main(args):
     atexit.register(close_record_writer, record_writer)
 
     # camera init
-    camera_dict = load_ini_data_camera()
-    rs1 = RealSenseCamera(flip=True, device_id=camera_dict["top"])
-    rs2 = RealSenseCamera(flip=False, device_id=camera_dict["left"])
-    rs3 = RealSenseCamera(flip=True, device_id=camera_dict["right"])
-    camera_stop_event = threading.Event()
-    camera_failure_event = threading.Event()
-    camera_ready_events = [threading.Event() for _ in range(3)]
-    thread_cam_top = threading.Thread(
-        target=run_thread_cam,
-        args=(rs1, 0, camera_ready_events[0], camera_failure_event, camera_stop_event),
-        daemon=True,
-    )
-    thread_cam_left = threading.Thread(
-        target=run_thread_cam,
-        args=(rs2, 1, camera_ready_events[1], camera_failure_event, camera_stop_event),
-        daemon=True,
-    )
-    thread_cam_right = threading.Thread(
-        target=run_thread_cam,
-        args=(rs3, 2, camera_ready_events[2], camera_failure_event, camera_stop_event),
-        daemon=True,
-    )
-    thread_cam_top.start()
-    thread_cam_left.start()
-    thread_cam_right.start()
-    show_canvas = np.zeros((480, 640*3, 3), dtype=np.uint8)
-    camera_deadline = time.monotonic() + CAMERA_STARTUP_TIMEOUT_S
-    while not all(event.is_set() for event in camera_ready_events):
-        if camera_failure_event.is_set() or time.monotonic() >= camera_deadline:
-            camera_stop_event.set()
-            raise RuntimeError(
-                "Camera startup failed: all three cameras must deliver a frame before "
-                "the robot is initialized. Check the camera timeout messages above."
-            )
-        time.sleep(0.05)
-    print("camera thread init success...")
+    camera_settings = load_camera_settings()
+    camera_threads, camera_failure_event, camera_stop_event, close_cameras = start_configured_cameras(camera_settings)
+    atexit.register(close_cameras)
+    active_camera_indices = [CAMERA_NAMES.index(name) for name in camera_settings.serials]
+    recording_enabled = camera_settings.recording_enabled
+    print(f"camera thread init success: {list(camera_settings.serials)}, {camera_settings.fps} fps")
+    if not recording_enabled:
+        print("[RECORD] Three-view recording disabled; selected-camera teleoperation only.")
 
     # agent init
-    _, hands_dict = load_ini_data_hands()
+    hands_ini, hands_dict = load_ini_data_hands()
+    hand_sections = ("HAND_LEFT", "HAND_RIGHT")
+    absolute_mapping_verified = np.array([
+        hands_ini.getboolean(section, "absolute_mapping_verified", fallback=False)
+        for section in hand_sections
+    ])
+    physical_hand_sides = [
+        hands_ini.get(section, "physical_side", fallback="unverified")
+        for section in hand_sections
+    ]
+    print("[MAPPING] " + "; ".join(
+        f"hand={index} {section} COM={hands_dict[section].port} "
+        f"physical={physical_hand_sides[index]} absolute_verified={bool(absolute_mapping_verified[index])}"
+        for index, section in enumerate(hand_sections)
+    ), flush=True)
     left_agent = DobotAgent(which_hand="LEFT", dobot_config=hands_dict["HAND_LEFT"])
     right_agent = DobotAgent(which_hand="RIGHT", dobot_config=hands_dict["HAND_RIGHT"])
     agent = BimanualAgent(left_agent, right_agent)
@@ -451,8 +573,18 @@ def main(args):
 
     # button status init
     last_status = np.array(([0, 0, 0], [0, 0, 0]))  # init lock
-    thread_button = threading.Thread(target=button_monitor_realtime, args=(agent, ))
+    button_failure_event, button_stop_event = threading.Event(), threading.Event()
+    button_ready_event, button_errors = threading.Event(), []
+    thread_button = threading.Thread(target=run_button_monitor_guarded,
+                                    args=(agent, button_failure_event, button_stop_event,
+                                          button_ready_event, button_errors), daemon=True)
     thread_button.start()
+    atexit.register(button_stop_event.set)
+    if not button_ready_event.wait(timeout=3.0):
+        button_stop_event.set()
+        require_button_monitor_healthy(thread_button, button_failure_event, button_errors)
+        raise RuntimeError("Button monitor did not receive initial valid states within 3 seconds")
+    require_button_monitor_healthy(thread_button, button_failure_event, button_errors)
     print("button thread init success...")
 
     print("-------------------------Ok, let's start------------------------")
@@ -469,15 +601,18 @@ def main(args):
     max_servoj_speed_rad_s = float(
         os.environ.get("DOBOT_SERVOJ_MAX_SPEED_RAD_S", "4.0")
     )
-    min_servoj_step_rad = float(
-        os.environ.get("DOBOT_SERVOJ_MIN_STEP_RAD", "0.0")
-    )
     max_servoj_step_rad = float(
         os.environ.get("DOBOT_SERVOJ_MAX_STEP_RAD", "0.35")
     )
+    align_speed = float(os.environ.get("DOBOT_ALIGN_SPEED_RAD_S", "0.15"))
+    planner = AbsoluteTeleopPlanner(align_speed=align_speed,
+                                   follow_speed=max_servoj_speed_rad_s,
+                                   max_step=max_servoj_step_rad)
+    command_interval = CommandInterval()
+    last_tcp_limit_log = 0.0
     print(
-        f"[TELEOP] follower speed={max_servoj_speed_rad_s} rad/s, "
-        f"step=[{min_servoj_step_rad}, {max_servoj_step_rad}] rad",
+        f"[TELEOP] absolute joint targets; align={align_speed} rad/s, "
+        f"follow={max_servoj_speed_rad_s} rad/s, max_step={max_servoj_step_rad} rad",
         flush=True,
     )
     # Preserve the old 0.25 rad minimum jump tolerance, but scale the allowed
@@ -498,22 +633,18 @@ def main(args):
         f"max_speed={master_drop_speed_rad_s} rad/s",
         flush=True,
     )
-    # Relative teleoperation calibration. Absolute master angles are never
-    # sent to a follower; the first servo sample holds the current follower
-    # pose and subsequent commands apply only master motion deltas.
-    master_ref = None
-    follower_ref = None
-    servo_warmup_remaining = 0
+    last_action = env.get_obs()["joint_positions"].copy()
 
     while 1:
         tic = time.monotonic()
+        require_button_monitor_healthy(thread_button, button_failure_event, button_errors)
 
         if camera_failure_event.is_set():
             camera_stop_event.set()
             raise RuntimeError("Camera stream failed; robot commands are stopped.")
-        assert thread_cam_top.is_alive(), "Error: please check the top camera!"
-        assert thread_cam_left.is_alive(), "Error: please check the left camera!"
-        assert thread_cam_right.is_alive(), "Error: please check the right camera!"
+        if not all(thread.is_alive() for thread in camera_threads.values()):
+            camera_stop_event.set()
+            raise RuntimeError("Enabled camera thread stopped; robot commands are stopped.")
         assert not is_falling, "sensor   detection!"
 
         # Convert the master-hand convention to the Nova convention before
@@ -535,29 +666,59 @@ def main(args):
 
         # button A: long press event. servo or not
         if dev_what_to_do[0, 1] == 1 or dev_what_to_do[1, 1] == 1:
-            # Unlock the selected master. Do not auto-approach the Nova.
-            # The crossed target must already be close to the corresponding
-            # follower before ServoJ is enabled.
+            # Slow alignment is part of this nonblocking loop, so button,
+            # camera and workspace checks remain active during alignment.
+            obs = env.get_obs()
+            new_master_flags = np.asarray(dev_what_to_do[:, 1] == 1, dtype=int)
+            new_nova_flags = master_to_nova_flags(new_master_flags)
+            unverified = np.flatnonzero(new_master_flags.astype(bool) & ~absolute_mapping_verified)
+            if len(unverified):
+                for master_side in range(2):
+                    agent.set_torque(master_side, True)
+                what_to_do[:, 1:] = 0
+                start_servo = False
+                planner.reset()
+                master_runaway_guard.clear()
+                _button_state_reset_generation[0] += 1
+                runtime_log("ALIGN_REJECTED_UNCALIBRATED", master_indices=unverified.tolist(),
+                            sections=[hand_sections[i] for i in unverified],
+                            physical_sides=[physical_hand_sides[i] for i in unverified])
+                set_light(env, "red", 1)
+                print("[ALIGN REJECTED] absolute master mapping is not calibrated. "
+                      "Complete manual step 7 calibration; no alignment motion was sent.",
+                      flush=True)
+                continue
+            safe_alignment, alignment_details = validate_absolute_alignment(
+                obs["joint_positions"], master_now, robot_type, new_nova_flags)
+            if not safe_alignment:
+                for master_side in range(2):
+                    agent.set_torque(master_side, True)
+                what_to_do[:, 1:] = 0
+                start_servo = False
+                planner.reset()
+                master_runaway_guard.clear()
+                _button_state_reset_generation[0] += 1
+                runtime_log("ALIGN_REJECTED_UNSAFE", master_flags=new_master_flags,
+                            nova_flags=new_nova_flags, current=obs["joint_positions"],
+                            target=master_now, details=alignment_details)
+                set_light(env, "red", 1)
+                print("[ALIGN REJECTED] absolute target/path leaves the configured "
+                      "workspace; no alignment motion was sent. Calibrate the master "
+                      "mapping or place it at a safe compatible pose.", flush=True)
+                continue
             for i in range(2):
-                if what_to_do[i, 1]:
+                if dev_what_to_do[i, 1] == 1:
                     agent.set_torque(i, False)
-            master_ref = master_now.copy()
-            follower_ref = env.get_obs()["joint_positions"].copy()
-            # Seed the guard so the first servo cycle cannot include motion
-            # accumulated while servo was off.
-            master_runaway_guard.reset(master_ref)
-            # The enable event is a hold-point calibration, not a move event.
-            # No absolute master pose is sent to the follower here.
-            last_action = follower_ref.copy()
-            servo_warmup_remaining = 10
+            last_action = planner.enable(
+                flag_in, obs["joint_positions"], last_action)
+            master_runaway_guard.reset(master_now)
+            command_interval.reset(time.monotonic())
             start_servo = True
             if curr_light != "green":
                 curr_light = set_light(env, "yellow", 1)
-            print(
-                "[SERVO READY] relative hold calibrated; first command holds "
-                "the current follower pose; no automatic approach.",
-                flush=True,
-            )
+            runtime_log("ALIGN_START", flags=flag_in.copy(), speed_rad_s=align_speed,
+                        current=obs["joint_positions"], target=master_now,
+                        path_samples=alignment_details["samples"])
 
         if dev_what_to_do[0, 1] == -1 or dev_what_to_do[1, 1] == -1:
             # Stopping servo must explicitly restore torque for the master
@@ -569,10 +730,8 @@ def main(args):
                     runtime_log("SERVO_OFF", hand=i, state=what_to_do.copy())
             if what_to_do[0, 1] == 0 and what_to_do[1, 1] == 0:
                 start_servo = False
-                master_ref = None
-                follower_ref = None
+                planner.reset()
                 master_runaway_guard.clear()
-                servo_warmup_remaining = 0
                 last_action = env.get_obs()["joint_positions"].copy()
                 set_light(env, "green", 0)
 
@@ -584,17 +743,9 @@ def main(args):
             # operator's hand" case: the master goes limp, gravity throws
             # its joints, and without this guard the follower would try to
             # chase that transient.
-            warmup_action, master_ref, servo_warmup_remaining = consume_servo_warmup(
-                follower_ref,
-                master_now,
-                servo_warmup_remaining,
-            )
-            if warmup_action is not None:
-                action = warmup_action
-                master_runaway_guard.reset(master_now)
-            else:
-                runaway = master_runaway_guard.check(master_now, flag_in)
-            if warmup_action is None and runaway.tripped:
+            last_action = planner.enable(flag_in, obs["joint_positions"], last_action)
+            runaway = master_runaway_guard.check(master_now, flag_in)
+            if runaway.tripped:
                 runtime_log(
                     "MASTER_DROP_LOCK",
                     threshold=runaway.allowed_delta_rad,
@@ -617,43 +768,27 @@ def main(args):
                 what_to_do[:, 2] = 0
                 _button_state_reset_generation[0] += 1
                 start_servo = False
-                master_ref = None
-                follower_ref = None
+                planner.reset()
                 master_runaway_guard.clear()
-                servo_warmup_remaining = 0
                 last_action = env.get_obs()["joint_positions"].copy()
                 continue
 
-            # Keep the same master-to-Nova convention conversion for every
-            # ServoJ cycle. Reuse the sample captured at the top of the loop
-            # so the master serial port is polled exactly once per cycle.
-            # Relative crossed teleoperation: preserve each follower's pose at
-            # enable, then apply only the mapped master displacement.
-            if warmup_action is None:
-                action = follower_ref.copy()
-                cycle_elapsed = max(time.monotonic() - tic, 1e-3)
-                cycle_step_rad = min(
-                    max_servoj_step_rad,
-                    max(min_servoj_step_rad, max_servoj_speed_rad_s * cycle_elapsed),
-                )
-                for i in range(14):
-                    if i in (6, 13):
-                        continue
-                    if not flag_in[0 if i < 7 else 1]:
-                        action[i] = last_action[i]
-                    else:
-                        master_delta = master_now[i] - master_ref[i]
-                        desired = follower_ref[i] + master_delta
-                        delta = desired - last_action[i]
-                        action[i] = last_action[i] + np.clip(
-                            delta, -cycle_step_rad, cycle_step_rad
-                        )
-                action = apply_same_side_gripper_targets(
-                    action,
-                    master_now,
-                    last_action,
-                    gripper_flags,
-                )
+            # Use the interval between consecutive command proposals, including
+            # the prior network roundtrip, not time spent in this loop prefix.
+            command_time = time.monotonic()
+            cycle_elapsed = command_interval.elapsed(command_time)
+            action, aligned_sides = planner.step(
+                master_now, obs["joint_positions"], last_action, cycle_elapsed)
+            for side in aligned_sides:
+                runtime_log("ALIGN_DONE", nova_side=side, follow_speed_rad_s=max_servoj_speed_rad_s)
+            # Gripper flags are in master/same-side order; alignment is Nova/crossed order.
+            aligned_gripper_flags = np.asarray(gripper_flags) * planner.aligned[::-1]
+            action = apply_same_side_gripper_targets(action, master_now, last_action, aligned_gripper_flags)
+            action, limited_sides = limit_tcp_descent(
+                action, last_action, cycle_elapsed, robot_type, flag_in)
+            if limited_sides and command_time - last_tcp_limit_log >= 1.0:
+                runtime_log("TCP_SPEED_LIMITED", details=limited_sides, interval_s=cycle_elapsed)
+                last_tcp_limit_log = command_time
             runtime_log(
                 "SERVO_COMMAND",
                 raw_action=master_now,
@@ -671,8 +806,7 @@ def main(args):
                 what_to_do[:, 2] = 0
                 _button_state_reset_generation[0] += 1
                 start_servo = False
-                master_ref = None
-                follower_ref = None
+                planner.reset()
                 last_action = env.get_obs()["joint_positions"].copy()
                 runtime_log("SERVO_STATE_RESET", reason="servo_action_check")
                 continue
@@ -681,14 +815,9 @@ def main(args):
             # [Note]: Modify the protection parameters in this section carefully !
             pose_protection = False
             joint_safety = False
-            if (safe_limit < 1):
-                safe_limit = safe_limit + 1
-            else:
-                positions, vel = calculate_vel_pos(
-                    action, last_action, max(cycle_elapsed, 1e-3), robot_type
-                )
-                pose_protection = check_pose_protection(positions, vel, flag_in)
-                joint_safety = check_joint_safety(action, flag_in)
+            positions, vel = calculate_vel_pos(action, last_action, cycle_elapsed, robot_type)
+            pose_protection = check_pose_protection(positions, vel, flag_in)
+            joint_safety = check_joint_safety(action, flag_in)
             if pose_protection or joint_safety:
                 reasons = []
                 if pose_protection:
@@ -700,6 +829,9 @@ def main(args):
                     reason="+".join(reasons),
                     action=action,
                     flags=flag_in.copy(),
+                    command_interval_s=cycle_elapsed,
+                    positions_mm={key: (value * 1000).tolist() for key, value in positions.items()},
+                    tcp_z_m_s={key: float(value[2]) for key, value in vel.items()},
                 )
                 set_light(env, "red", 1)
                 for hand in range(2):
@@ -708,26 +840,24 @@ def main(args):
                 what_to_do[:, 2] = 0
                 _button_state_reset_generation[0] += 1
                 start_servo = False
-                master_ref = None
-                follower_ref = None
-                servo_warmup_remaining = 0
+                planner.reset()
                 safe_limit = 0
-                runtime_log("SERVO_STATE_RESET", reason="joint_safety")
+                runtime_log("SERVO_STATE_RESET", reason="+".join(reasons))
                 continue
             # ×××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××××
 
             # button B: recording or not
-            if dev_what_to_do[0, 2] == 1:
+            if dev_what_to_do[0, 2] == 1 and recording_enabled:
                 idx = 0
                 record_source_index = 0
                 curr_light = set_light(env, "green", 1)
-            elif dev_what_to_do[0, 2] == -1:
+            elif dev_what_to_do[0, 2] == -1 and recording_enabled:
                 curr_light = set_light(env, "yellow", 1)
 
             # Preserve the behavior-cloning pairing used by the original
             # collector: pre-command observation obs_t with action_t. The
             # queue callback performs disk I/O later, off the control thread.
-            if what_to_do[0, 2] == 1:
+            if what_to_do[0, 2] == 1 and recording_enabled:
                 capture_time = time.monotonic()
 
                 def _snapshot_recording():
@@ -771,9 +901,13 @@ def main(args):
                             )
                             last_record_queue_warning = now
 
+            # Outside the ServoJ recovery handler: a dead button monitor is
+            # fatal, and must not be swallowed and retried next cycle.
+            require_button_monitor_healthy(thread_button, button_failure_event, button_errors)
             try:
                 runtime_log("ENV_STEP_BEGIN", action=action, flags=flag_in.copy())
-                obs = env.step(action, flag_in, gripper_flags)
+                obs = env.step(action, flag_in, aligned_gripper_flags)
+                command_interval.committed(command_time)
                 runtime_log("ENV_STEP_OK", action=action, flags=flag_in.copy())
             except Exception as exc:
                 runtime_log(
@@ -790,6 +924,7 @@ def main(args):
                 what_to_do[:, 2] = 0
                 _button_state_reset_generation[0] += 1
                 start_servo = False
+                planner.reset()
                 safe_limit = 0
                 try:
                     last_action = env.get_obs()["joint_positions"].copy()
@@ -805,9 +940,8 @@ def main(args):
 
         # img show
         if args.show_img:
-            show_canvas[:, :640] = np.asarray(img_list[0], dtype="uint8")
-            show_canvas[:, 640:640 * 2] = np.asarray(img_list[1], dtype="uint8")
-            show_canvas[:, 640 * 2:640 * 3] = np.asarray(img_list[2], dtype="uint8")
+            show_canvas = np.concatenate([np.asarray(img_list[i], dtype="uint8")
+                                          for i in active_camera_indices], axis=1)
             cv2.imshow("0", show_canvas)
             cv2.waitKey(1)
 

@@ -1,0 +1,10 @@
+# Local bring-up dependency subset, derived from the teleop import chain.
+# Python 3.11 x64. Not an upstream training-environment lock.
+# Exact locally verified versions are recorded in requirements-teleop-windows.lock.txt.
+numpy==1.26.4
+opencv-python==4.10.0.84
+tyro==0.8.8
+pyserial==3.5
+pyzmq>=26,<28
+requests>=2.32.5,<3
+pyrealsense2>=2.56,<3
