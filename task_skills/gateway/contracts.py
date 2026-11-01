@@ -26,6 +26,9 @@ CHEMISTRY_UPSTREAM_SKILLS = {
     "gripper.set_position", "arm.rotate_about_pivot",
 }
 CHEMISTRY_SKILLS = {CHEMISTRY_SKILL_PREFIX + name: name for name in CHEMISTRY_UPSTREAM_SKILLS}
+# Guidance skills name a key experimental operation. They never reach the
+# executor: Catalog.validate expands them into dobot.* atoms first.
+GUIDANCE_SKILLS = {"embodied.pour"}
 EXECUTABLE_SKILLS = SKILLS | set(CHEMISTRY_SKILLS)
 FAMILIES = {"embodied", "chemistry"}
 
@@ -122,6 +125,31 @@ def _chemistry_contract(profile=None, catalog=None):
             "poses_digest": digest(chemistry_profile.get("poses", {})), "skills": skills}
 
 
+def _pour_guidance_skill():
+    return {
+        "skill_id": "embodied.pour", "version": "1.0.0", "name_zh": "倾倒液体",
+        "aliases_zh": ["倾倒液体", "把烧杯中的液体倒入离心管"],
+        "lifecycle": "approved", "skill_kind": "embodied_action", "implements": [],
+        "method": {"family": "guided_choreography", "mode": "bimanual_calibrated_pose"},
+        "required_capabilities": ["arm_motion", "gripper_actuation"],
+        "required_sensors": ["controller_state", "tcp_pose", "joint_position", "gripper_position"],
+        "parameters": {
+            "source_object": {"type": "string", "required": True, "enum": ["beaker"]},
+            "target_object": {"type": "string", "required": True, "enum": ["tube"]},
+            "tilt_deg": {"type": "number", "default": 80, "exclusiveMinimum": 0, "maximum": 90},
+            "motion_speed": {"type": "integer", "default": 15, "minimum": 1, "maximum": 35},
+        },
+        "applicable_device_types": ["embodied_executor"],
+        "preconditions": ["both grippers are open: run prepare_open_grippers first"],
+        "completion_conditions": [{"signal": "motion_sequence_completed", "operator": "eq", "value": True}],
+        "abort_conditions": [{"signal": "controller_alarm", "operator": "eq", "value": True}],
+        "execution_semantics": {"idempotent_start": True, "supports_pause": False,
+                                "supports_cancel": True, "maximum_retries": 0},
+        "verification": {"level": "command_trace", "physical_success_verified": False},
+        "warning": "Uses both arms; poses, order and timing are chosen by this gateway.",
+    }
+
+
 class Catalog:
     def __init__(self, scene, mode="mock", chemistry=None):
         self.scene = scene
@@ -131,7 +159,8 @@ class Catalog:
                                            "mode": mode, "skill_version": "1.0.0",
                                            "cross_arm_motion_concurrency": 2,
                                            "chemistry_catalog": self.chemistry["catalog"],
-                                           "chemistry_poses": self.chemistry["poses_digest"]})[:20]
+                                           "chemistry_poses": self.chemistry["poses_digest"],
+                                           "guidance_skills": _pour_guidance_skill()})[:20]
 
     def _chemistry_operation(self, skill, arm, params, node_id, timeout, path):
         """Normalize one dobot.* node through the chemistry registry.
@@ -156,6 +185,23 @@ class Catalog:
                           parameters={"skill": name, "parameters": normalized},
                           timeout_seconds=timeout)
 
+    @staticmethod
+    def _expand_guidance(package):
+        """Replace guidance nodes with atoms; every later check sees only atoms."""
+        nodes = package.get("nodes")
+        if not isinstance(nodes, list) or not any(
+                isinstance(node, dict) and isinstance(node.get("skill_invocation"), dict)
+                and node["skill_invocation"].get("skill_id") in GUIDANCE_SKILLS for node in nodes):
+            return package
+        from ..chemistry.choreography import ChoreographyError, choreograph
+
+        try:
+            expanded, lineage = choreograph(package)
+        except ChoreographyError as error:
+            raise ContractError("INVALID_GRAPH", str(error), "nodes") from error
+        expanded["guidance_lineage"] = lineage
+        return expanded
+
     def snapshot(self):
         devices = []
         for device, arm in DEVICES.items():
@@ -163,7 +209,7 @@ class Catalog:
                 "device_id": device, "name": "Dobot Nova " + arm, "device_type": "embodied_executor",
                 "manufacturer": "Dobot", "capability_version": "1.0.0",
                 "capabilities": ["pick", "place", "atomic_actions"],
-                "supported_skill_ids": sorted(EXECUTABLE_SKILLS),
+                "supported_skill_ids": sorted(EXECUTABLE_SKILLS | GUIDANCE_SKILLS),
                 "parameter_ranges": {}, "precision": {},
                 "completion_tolerances": {"tcp_position_mm": 1.0, "joint_angle_deg": 1.0},
                 "sensors": ["controller_state", "tcp_pose", "joint_position", "gripper_position"],
@@ -194,6 +240,7 @@ class Catalog:
                 "verification": {"level": "command_trace", "physical_success_verified": False},
             })
         skills.extend(self.chemistry["skills"])
+        skills.append(_pour_guidance_skill())
         return {"schema_version": "1.0", "catalog_revision": self.revision,
                 "provider": "dobot-embodied-team", "devices": devices, "atomic_skills": skills,
                 "execution_profile": {"name": "dobot-dag/1", "schema_version": "2.1", "mode": self.mode,
@@ -216,6 +263,7 @@ class Catalog:
         package = copy.deepcopy(package)
         if package.get("schema_version") != "2.1" or package.get("graph_version") != "0.1":
             raise ContractError("UNSUPPORTED_SCHEMA", "Supported schema_version=2.1, graph_version=0.1")
+        package = self._expand_guidance(package)
         graph_id = identifier(package.get("package_id"), "package_id")
         identifier(package.get("experiment_id"), "experiment_id")
         if package.get("graph_id", graph_id) != graph_id:
