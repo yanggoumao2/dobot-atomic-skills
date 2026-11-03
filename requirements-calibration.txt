@@ -1,0 +1,4 @@
+# Calibration wizard runtime only (Python 3.11 or 3.12).
+# The full X-Trainer stack in requirements.txt is not required for this UI.
+numpy==1.26.4
+opencv-python==4.8.1.78

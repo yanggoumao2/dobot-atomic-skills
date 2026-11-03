@@ -77,6 +77,26 @@ python -B tests/gateway_cli_smoke.py --output ./gateway-data/cli-smoke
 
 `requirements.txt` 保留 X-Trainer 原始完整环境依赖，包含相机、仿真与训练相关组件；Mock 联调无需安装该列表。
 
+## 相机到基座标定 UI
+
+仓库内置独立的七步中文标定向导，复用现有 Nova2 固定棋盘算法，支持左右臂分别标定、后台任务与日志、像素查询、独立验收和证据导出。它不修改执行网关、现有示教位姿或 scene/chemistry profile。
+
+Windows 在仓库根目录运行（创建隔离的 `.venv-calibration`，固定 NumPy 1.26.4 + OpenCV 4.8.1.78）：
+
+```powershell
+.\Start-Calibration.ps1
+```
+
+也可手工启动：
+
+```powershell
+py -3.12 -m venv .venv-calibration
+.\.venv-calibration\Scripts\python.exe -m pip install -r requirements-calibration.txt
+.\.venv-calibration\Scripts\python.exe -X utf8 -B -m task_skills.run_calibration_ui --open-browser
+```
+
+默认只监听 `127.0.0.1:8765`，数据写入被 Git 忽略的 `calibration-data/`。启动不会连接相机或机器人；相机预览/采集与只读 `GetPose()` 必须由操作者在页面中显式触发。模拟任务全程标记 `synthetic_only`，不能作为真机验收或用于真实控制。完整步骤、安全边界、集成 API 与测试命令见 [标定 UI 文档](docs/calibration-ui.md)。
+
 ## 文档与入口
 
 | 内容 | 位置 |

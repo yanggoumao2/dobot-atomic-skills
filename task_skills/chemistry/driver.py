@@ -944,18 +944,21 @@ class LiveDriver:
     # ------------------------------------------------------------------ execution
 
     def _ensure_session(self, profile: dict[str, Any], arm: str, speed: int,
-                        *, configure: bool = True) -> _ArmRig:
+                        *, configure: bool = True, clear_errors: bool = True) -> _ArmRig:
         """Acquire the rig once, then bring the requested arm into remote control.
 
         ``configure=False`` opens the connections and takes the lease without
         clearing errors or enabling the arm, which is what a pure dwell needs: a
         five second wait must not power up a robot by itself.
+        ``clear_errors=False`` skips ClearError, for callers that refuse to start
+        on an alarm and leave clearing it to the operator at the pendant.
         """
         with self._session_lock:
-            return self._open_session(profile, arm, speed, configure=configure)
+            return self._open_session(profile, arm, speed, configure=configure,
+                                      clear_errors=clear_errors)
 
     def _open_session(self, profile: dict[str, Any], arm: str, speed: int,
-                      *, configure: bool = True) -> _ArmRig:
+                      *, configure: bool = True, clear_errors: bool = True) -> _ArmRig:
         if self._lease is None:
             lease = DeviceLease(path=self._lock_path, purpose="chemistry-atomic-skills")
             lease.acquire()
@@ -963,9 +966,12 @@ class LiveDriver:
             self._log(f"device lease acquired: {lease.owner}")
         rig = self._rig(arm, profile, with_motion=True)
         if configure and not rig.configured:
-            self._log(f"{arm}: ClearError -> EnableRobot -> speed/accel {speed}% -> Tool/User")
-            for label, call in (("ClearError", rig.dashboard.ClearError),
-                                ("EnableRobot", rig.dashboard.EnableRobot)):
+            steps = [("EnableRobot", rig.dashboard.EnableRobot)]
+            if clear_errors:
+                steps.insert(0, ("ClearError", rig.dashboard.ClearError))
+            self._log(f"{arm}: {' -> '.join(label for label, _ in steps)} -> "
+                      f"speed/accel {speed}% -> Tool/User")
+            for label, call in steps:
                 if _reply_status(call()) != 0:
                     raise RuntimeError(f"{label} on {arm} was not acknowledged with status 0")
             for name in ("SpeedFactor", "AccJ", "SpeedJ", "AccL", "SpeedL"):

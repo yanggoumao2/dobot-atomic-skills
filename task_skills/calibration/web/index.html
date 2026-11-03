@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Dobot 相机到基座标定向导</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#workspace">跳到当前步骤</a>
+  <header class="topbar">
+    <div class="brand-block">
+      <div class="brand-mark" aria-hidden="true">◎</div>
+      <div>
+        <p class="eyebrow">DOBOT · ATOMIC SKILLS</p>
+        <h1>相机到基座标定向导</h1>
+      </div>
+    </div>
+    <div class="top-status" aria-live="polite">
+      <span id="sessionBadge" class="badge neutral">未选择任务</span>
+      <span id="syntheticBadge" class="badge warning hidden">synthetic_only</span>
+      <span id="serverBadge" class="badge neutral">连接中</span>
+      <span id="cameraBadge" class="badge neutral">相机未打开</span>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <aside class="step-nav" aria-label="七步标定流程">
+      <div class="session-mini">
+        <label for="sessionSelect">当前任务</label>
+        <select id="sessionSelect" aria-describedby="sessionHelp">
+          <option value="">新建或选择任务</option>
+        </select>
+        <p id="sessionHelp" class="microcopy">刷新后自动恢复最近任务。</p>
+      </div>
+      <ol id="stepList" class="step-list">
+        <li><button type="button" class="step-button is-active" data-step="1"><span class="step-no">01</span><span class="step-name">准备与依赖</span><span class="step-dot" aria-hidden="true"></span></button></li>
+        <li><button type="button" class="step-button" data-step="2"><span class="step-no">02</span><span class="step-name">相机内参</span><span class="step-dot" aria-hidden="true"></span></button></li>
+        <li><button type="button" class="step-button" data-step="3"><span class="step-no">03</span><span class="step-name">固定棋盘</span><span class="step-dot" aria-hidden="true"></span></button></li>
+        <li><button type="button" class="step-button" data-step="4"><span class="step-no">04</span><span class="step-name">TCP 角点示教</span><span class="step-dot" aria-hidden="true"></span></button></li>
+        <li><button type="button" class="step-button" data-step="5"><span class="step-no">05</span><span class="step-name">左右臂拟合</span><span class="step-dot" aria-hidden="true"></span></button></li>
+        <li><button type="button" class="step-button" data-step="6"><span class="step-no">06</span><span class="step-name">像素查询</span><span class="step-dot" aria-hidden="true"></span></button></li>
+        <li><button type="button" class="step-button" data-step="7"><span class="step-no">07</span><span class="step-name">独立验收与导出</span><span class="step-dot" aria-hidden="true"></span></button></li>
+      </ol>
+      <div class="nav-note">
+        <strong>硬件边界</strong>
+        <p>页面启动不会连接任何设备。相机和 GetPose 只在操作者显式点击后执行。</p>
+      </div>
+    </aside>
+
+    <section id="workspace" class="workspace" tabindex="-1">
+      <header class="stage-header">
+        <div>
+          <p id="stageEyebrow" class="eyebrow">STEP 01 / 07</p>
+          <h2 id="stageTitle">环境、依赖与任务准备</h2>
+          <p id="stageDescription" class="stage-description">先确认本机为隔离环境，再创建真实任务或明确标记的模拟任务。</p>
+        </div>
+        <div class="stage-nav-buttons">
+          <button id="prevStep" type="button" class="button ghost">上一步</button>
+          <button id="nextStep" type="button" class="button secondary">下一步</button>
+        </div>
+      </header>
+
+      <div id="emptySessionBanner" class="notice info">
+        当前没有活动任务。可在下方创建任务，或从左侧选择已有任务恢复。
+      </div>
+
+      <section class="stage" data-stage="1" aria-labelledby="stageTitle">
+        <div class="grid two">
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">ENVIRONMENT</p><h3>依赖与运行边界</h3></div><span id="dependencyOverall" class="badge neutral">检查中</span></div>
+            <div id="dependencyGrid" class="dependency-grid"></div>
+            <p class="help">支持基线为 Python 3.11/3.12 + NumPy 1.26.4 + OpenCV 4.8.1.78。若版本不匹配会明确显示，但不等于真机验收。</p>
+          </article>
+          <article class="panel accent-panel">
+            <div class="panel-heading"><div><p class="eyebrow">SESSION</p><h3>创建新任务</h3></div><span class="badge real">real / synthetic</span></div>
+            <form id="createSessionForm" class="form-grid">
+              <label class="field span-2">任务名称<input name="display_name" required maxlength="80" value="Nova2 相机标定"></label>
+              <label class="field">模式<select name="mode"><option value="real">真实任务</option><option value="synthetic">模拟演示（synthetic_only）</option></select></label>
+              <label class="field">相机 ID<input name="camera_id" required maxlength="128" value="overhead_camera"></label>
+              <label class="field">宽度 px<input name="width" type="number" min="64" max="16384" value="1280" required></label>
+              <label class="field">高度 px<input name="height" type="number" min="64" max="16384" value="960" required></label>
+              <label class="field">内角点列数<input name="cols" type="number" min="3" max="30" value="11" required></label>
+              <label class="field">内角点行数<input name="rows" type="number" min="3" max="30" value="8" required></label>
+              <label class="field">格长 m<input name="square_m" type="number" min="0.001" max="0.5" step="0.001" value="0.03" required></label>
+              <label class="field">内参图 RMS 上限 px<input name="intrinsics_max_rms_px" type="number" min="0.001" max="100" step="any" value="1.0" required></label>
+              <label class="field">拟合 PnP RMS 上限 px<input name="fit_max_pnp_rms_px" type="number" min="0.001" max="100" step="any" value="1.0" required></label>
+              <label class="field">拟合点误差上限 mm<input name="fit_max_error_mm" type="number" min="0.001" max="100" step="any" value="2.0" required></label>
+              <label class="field">独立验收上限 mm<input name="verify_max_error_mm" type="number" min="0.001" max="100" step="any" value="2.0" required></label>
+              <div class="span-2 inline-actions">
+                <button type="submit" class="button primary">创建任务</button>
+                <span class="microcopy">11×8 内角点对应 12×9 个方格；默认格长 30 mm。</span>
+              </div>
+            </form>
+          </article>
+        </div>
+
+        <article id="settingsPanel" class="panel hidden">
+          <div class="panel-heading"><div><p class="eyebrow">ACTIVE SESSION</p><h3>当前任务设置</h3></div><span id="settingsRevision" class="badge neutral"></span></div>
+          <form id="settingsForm" class="form-grid compact">
+            <label class="field">相机 ID<input name="camera_id" required maxlength="128"></label>
+            <label class="field">宽度 px<input name="width" type="number" min="64" max="16384" required></label>
+            <label class="field">高度 px<input name="height" type="number" min="64" max="16384" required></label>
+            <label class="field">内角点列数<input name="cols" type="number" min="3" max="30" required></label>
+            <label class="field">内角点行数<input name="rows" type="number" min="3" max="30" required></label>
+            <label class="field">格长 m<input name="square_m" type="number" min="0.001" max="0.5" step="0.001" required></label>
+            <label class="field">内参 RMS px<input name="intrinsics_max_rms_px" type="number" min="0.001" max="100" step="any" required></label>
+            <label class="field">PnP RMS px<input name="fit_max_pnp_rms_px" type="number" min="0.001" max="100" step="any" required></label>
+            <label class="field">拟合误差 mm<input name="fit_max_error_mm" type="number" min="0.001" max="100" step="any" required></label>
+            <label class="field">验收误差 mm<input name="verify_max_error_mm" type="number" min="0.001" max="100" step="any" required></label>
+            <div class="span-2 inline-actions"><button type="submit" class="button secondary">保存设置</button><span class="microcopy">修改几何、阈值会使相关下游证据失效。</span></div>
+          </form>
+        </article>
+      </section>
+
+      <section class="stage hidden" data-stage="2">
+        <div class="notice warning"><strong>内参阶段必须移动棋盘。</strong> 覆盖中心、四角、远近和不同倾角；相机位置、分辨率、焦距、对焦和图像处理设置保持固定。推荐 18–24 train / 5–8 val，最低 10 / 3。</div>
+        <div class="grid two">
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">ACQUISITION</p><h3>上传或本机相机采集</h3></div><span id="intrinsicsCountBadge" class="badge neutral">0 / 0</span></div>
+            <div class="inline-actions wrap">
+              <label class="field inline">数据划分<select id="uploadSplit"><option value="train">train</option><option value="val">val</option></select></label>
+              <label class="button secondary file-button">选择多张图片<input id="intrinsicsFiles" type="file" accept="image/png,image/jpeg" multiple></label>
+            </div>
+            <p class="help">上传原始 PNG/JPEG；服务器会统一转为 PNG，检测 88 个内角点并生成缩略图与叠加图。内容重复或分辨率不一致会被拒绝。</p>
+            <div class="camera-box">
+              <div class="inline-actions wrap">
+                <label class="field inline">设备编号<input id="cameraDevice" type="number" min="0" max="32" value="0"></label>
+                <button id="cameraStart" type="button" class="button secondary">打开相机预览</button>
+                <button id="cameraCaptureTrain" type="button" class="button secondary" disabled>采集 train</button>
+                <button id="cameraCaptureVal" type="button" class="button secondary" disabled>采集 val</button>
+                <button id="cameraStop" type="button" class="button ghost" disabled>停止并释放</button>
+              </div>
+              <div class="camera-preview-frame"><img id="cameraPreview" alt="本机相机预览" class="hidden"><div id="cameraPlaceholder" class="empty-media">相机未打开。启动只在点击后发生。</div></div>
+            </div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">VALIDATION</p><h3>内参计算</h3></div><span id="intrinsicsStateBadge" class="badge neutral">未运行</span></div>
+            <div id="intrinsicsMetrics" class="metric-strip"></div>
+            <div class="inline-actions"><button id="runIntrinsics" type="button" class="button primary">运行内参标定</button><span id="intrinsicsGateReason" class="microcopy"></span></div>
+            <div id="intrinsicsJob" class="job-panel hidden" aria-live="polite"></div>
+            <div id="intrinsicsChart" class="chart-box empty-media">运行后显示每张图重投影 RMS。</div>
+          </article>
+        </div>
+        <article class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">GALLERY</p><h3>图像、覆盖与逐图残差</h3></div><span class="badge neutral" id="galleryCount"></span></div>
+          <div id="galleryToolbar" class="inline-actions wrap gallery-toolbar"></div>
+          <div id="intrinsicsGallery" class="image-gallery"><div class="empty-media">尚无内参图像。</div></div>
+        </article>
+      </section>
+
+      <section class="stage hidden" data-stage="3">
+        <div class="notice warning"><strong>从本步开始，棋盘必须固定。</strong> 完整看见 88 个内角点后再检测；示教期间不能移动棋盘、相机或改变图像几何。</div>
+        <div class="grid two">
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">FIXED BOARD</p><h3>采集固定板图像</h3></div><span id="boardStateBadge" class="badge neutral">未上传</span></div>
+            <div class="inline-actions wrap">
+              <label class="button secondary file-button">上传固定板图<input id="boardFile" type="file" accept="image/png,image/jpeg"></label>
+              <button id="boardCameraCapture" type="button" class="button secondary" disabled>用当前相机截取</button>
+              <button id="detectBoard" type="button" class="button primary">检测 88 个角点</button>
+            </div>
+            <p class="help">原点是编号 0 的内交点；板 x 轴指向编号 1，y 轴指向编号 11。0 不是板的外边角。</p>
+            <div class="board-preview-grid">
+              <figure><img id="boardOriginal" alt="固定棋盘原图" class="hidden"><figcaption>原始图像</figcaption></figure>
+              <figure><img id="boardNumbered" alt="固定棋盘编号图" class="hidden"><figcaption>编号图（可切换 normal/reverse 预览）</figcaption></figure>
+            </div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">HUMAN CONFIRMATION</p><h3>确认编号方向并冻结版本</h3></div><span id="boardRevisionBadge" class="badge neutral"></span></div>
+            <fieldset class="field-group">
+              <legend>实体板编号方向</legend>
+              <label class="radio"><input type="radio" name="cornerOrder" value="normal" checked> normal（按检测顺序）</label>
+              <label class="radio"><input type="radio" name="cornerOrder" value="reverse"> reverse（反向编号）</label>
+            </fieldset>
+            <label class="check"><input id="boardFixedConfirm" type="checkbox"> 我已确认棋盘固定、平整且 88 个内角点完整可见。</label>
+            <div class="inline-actions"><button id="confirmBoard" type="button" class="button primary">确认并冻结编号</button></div>
+            <div id="boardConfirmation" class="result-box empty-media">尚未确认。</div>
+            <p class="help">确认后不能原地改编号；只能重新检测生成新版本，并使示教、拟合和验收全部失效。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="stage hidden" data-stage="4">
+        <div class="notice info">左右臂分别记录。默认单位 <strong>mm</strong>，页面会持续显式标注；切换单位不会自动换算已有数值。最低 6 train / 3 val，推荐 8–12 / 3–5。</div>
+        <div class="arm-tabs" role="tablist" aria-label="选择机械臂">
+          <button type="button" class="arm-tab is-active" data-arm="left" role="tab" aria-selected="true">左臂 LEFT</button>
+          <button type="button" class="arm-tab" data-arm="right" role="tab" aria-selected="false">右臂 RIGHT</button>
+        </div>
+        <div id="teachArms" class="arm-panels"></div>
+      </section>
+
+      <section class="stage hidden" data-stage="5">
+        <div class="notice info">每臂独立拟合。训练点求刚体变换，val 点是拟合 held-out 检查，<strong>不是</strong>独立验收。退出码 0=通过，2=计算完成但超阈值，1=运行错误。</div>
+        <div id="fitPanels" class="fit-grid"></div>
+      </section>
+
+      <section class="stage hidden" data-stage="6">
+        <div class="grid query-grid">
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">ORIGINAL RESOLUTION</p><h3>点击原始图像查询像素</h3></div><span id="queryPixelBadge" class="badge neutral">未选择</span></div>
+            <div id="queryImageWrap" class="query-image-wrap empty-media">固定棋盘确认后显示原图。</div>
+            <p class="help">点击坐标按 <code>naturalWidth / renderedWidth</code> 换算回原始像素；不会把缩放后的显示坐标直接当作像素。</p>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">QUERY MODE</p><h3>板坐标高度或已注册深度</h3></div><span id="depthBadge" class="badge neutral">深度禁用</span></div>
+            <div class="form-grid compact">
+              <label class="field">像素 u<input id="queryU" type="number" step="0.1" readonly></label>
+              <label class="field">像素 v<input id="queryV" type="number" step="0.1" readonly></label>
+              <fieldset class="field-group span-2"><legend>查询模式</legend>
+                <label class="radio"><input type="radio" name="queryMode" value="board" checked> 板坐标平面 z（有符号，米）</label>
+                <label class="radio"><input type="radio" name="queryMode" value="depth" id="depthModeRadio" disabled> 已注册光学-Z 深度（米）</label>
+              </fieldset>
+              <label class="field">board_z_m<input id="queryBoardZ" type="number" step="0.001" value="0"></label>
+              <label class="field">depth_z_m<input id="queryDepthZ" type="number" step="0.001" min="0.001" disabled placeholder="必须 > 0"></label>
+              <label class="check span-2"><input id="allowExtrapolation" type="checkbox"> 显式允许棋盘内角点矩形外推（需另行独立验收，默认关闭）</label>
+              <div class="span-2 inline-actions"><button id="runQuery" type="button" class="button primary">查询左右臂坐标</button></div>
+            </div>
+            <div id="queryResults" class="query-results empty-media">选择像素后查询。</div>
+            <details class="subpanel">
+              <summary>光学-Z 深度注册确认</summary>
+              <p class="help">只有 RGB 与深度已在同一光学坐标系注册并可追溯时才能启用。确认会绑定当前内参哈希；内参改变后自动失效。</p>
+              <label class="field">注册说明<textarea id="depthNote" rows="3" maxlength="500"></textarea></label>
+              <label class="check"><input id="depthConfirm" type="checkbox"> 我确认同一光学坐标系和深度尺度已经注册。</label>
+              <div class="inline-actions"><button id="saveDepthConfirmation" type="button" class="button secondary">保存深度注册确认</button><button id="disableDepth" type="button" class="button ghost">禁用深度模式</button></div>
+            </details>
+          </article>
+        </div>
+      </section>
+
+      <section class="stage hidden" data-stage="7">
+        <div class="notice warning"><strong>独立验收 ≠ 拟合 held-out。</strong> 参考 XYZ 必须由操作者用独立方法测量并手工输入/导入；本界面不会用相机变换自动回填真实参考值。至少 3 点。</div>
+        <div id="verifyPanels" class="verify-grid"></div>
+        <article class="panel export-panel">
+          <div class="panel-heading"><div><p class="eyebrow">BUNDLE</p><h3>报告与可用变换导出</h3></div><span id="exportStateBadge" class="badge neutral">未生成</span></div>
+          <div class="inline-actions wrap">
+            <label class="check"><input type="checkbox" id="exportLeft" checked> 左臂</label>
+            <label class="check"><input type="checkbox" id="exportRight" checked> 右臂</label>
+            <button id="createExport" type="button" class="button primary">生成报告包</button>
+          </div>
+          <p class="help">只有当前哈希匹配且独立验收通过的臂才能导出。Zip 包含每臂 JSON、CSV、坐标轴图、残差图、报告和 manifest；不会自动写入示教位姿、scene_config 或 chemistry profile。</p>
+          <div id="exportResult" class="result-box empty-media">尚未生成报告包。</div>
+        </article>
+      </section>
+    </section>
+
+    <aside class="rail" aria-label="前置条件、指标、产物与事件">
+      <section class="rail-card">
+        <div class="panel-heading"><h3>前置条件</h3><span class="badge neutral">server gate</span></div>
+        <ul id="gateList" class="gate-list"></ul>
+      </section>
+      <section class="rail-card">
+        <div class="panel-heading"><h3>关键指标</h3><span class="badge neutral">当前证据</span></div>
+        <div id="metricCards" class="metric-cards"></div>
+      </section>
+      <section class="rail-card">
+        <div class="panel-heading"><h3>产物</h3><span class="badge neutral">只读下载</span></div>
+        <div id="artifactList" class="artifact-list empty-media">尚无产物。</div>
+      </section>
+      <details class="rail-card event-card">
+        <summary>事件日志 <span id="eventCount" class="badge neutral">0</span></summary>
+        <div id="eventLog" class="event-log empty-media">尚无事件。</div>
+      </details>
+    </aside>
+  </main>
+
+  <div id="toastRegion" class="toast-region" aria-live="assertive" aria-atomic="false"></div>
+  <div id="busyBar" class="busy-bar hidden" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span id="busyText">处理中…</span></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
