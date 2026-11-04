@@ -97,7 +97,8 @@ GOTO_HOVER_MM = 20.0        # t key: stop this far above the predicted corner
 # hover + clearance, then lowers onto the hover point. Lower crossings are tried only
 # when a higher one is unreachable.
 GOTO_CLEARANCES_MM = (60.0, 40.0, 20.0, 0.0)
-GOTO_SEGMENT_MM = 20.0      # and travel in checked MovL pieces no longer than this
+GOTO_SEGMENT_MM = 20.0      # kept for callers that still cut paths into pieces
+LINE_CHECK_MM = 10.0        # a straight leg is IK/FK-checked this often, then sent as one MovL
 GOTO_TILT_LIMIT_DEG = 1.0   # t needs the tool already snapped down (v)
 
 # RobotMode values from the Dobot TCP/IP protocol (V3 controller).
@@ -130,6 +131,7 @@ HELP = """\
   p            记录当前 TCP 为标定角点（写入 CSV）
   t            输入角点编号，移到拟合预测位置正上方 20 mm（需 --session；原地升降到棋盘上方约 80 mm 再平移再下降）
                到了以后必须自己看准真实角点、平移修正后再下降，不能直接按预测位置记录
+  x            输入基座 X Y Z（mm），按同样的安全路线移过去，姿态不变（例如视觉算出的悬停点）
   z            把 Z 下限设到当前高度下 0.5 mm（尖端刚碰到棋盘时按）
   i            显示当前状态        h  显示本帮助
   q 或 Esc     退出（下使能；不会断电）
@@ -259,9 +261,12 @@ class SimArm:
         self.pose = [*xyz, *rpy]  # an instant arm
         self.joints = list(joints)
 
-    def wait(self, xyz, rpy, joints, stop_pressed: Callable[[], bool]) -> dict[str, Any]:
+    def wait(self, xyz, rpy, joints, stop_pressed: Callable[[], bool],
+             progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         self.pose = [*xyz, *rpy]
         self.joints = list(joints)
+        if progress is not None:
+            progress(self.read())
         return self.read()
 
     def stop(self) -> None:
@@ -353,7 +358,8 @@ class LiveArm:
 
         self.driver._send_motion(self.rig, linear_frame(xyz, rpy), "jog MovL")
 
-    def wait(self, xyz, rpy, joints, stop_pressed: Callable[[], bool]) -> dict[str, Any]:
+    def wait(self, xyz, rpy, joints, stop_pressed: Callable[[], bool],
+             progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         deadline = time.time() + ARRIVAL_TIMEOUT_S
         stable = 0
         while time.time() < deadline:
@@ -363,6 +369,8 @@ class LiveArm:
             state = self.read()
             if state["mode"] == ALARM_MODE:
                 raise RuntimeError("运动中控制器报警（RobotMode=9），请到示教器查看原因；本程序不会清报警")
+            if progress is not None:
+                progress(state)
             error = max(abs(state["pose"][axis] - xyz[axis]) for axis in range(3))
             stable = stable + 1 if state["mode"] == 5 and error <= ARRIVAL_TOL_MM else 0
             if stable >= ARRIVAL_SAMPLES:
@@ -515,18 +523,48 @@ class Jog:
         if report:
             self.out(f"到达，实测偏差 {error:.3f} mm | {self.status()}")
 
-    def travel_path(self, target: Sequence[float], travel_z: float) -> list[list[float]]:
-        """Vertical to travel_z over the start, across at travel_z, then vertical onto target."""
+    def travel_legs(self, target: Sequence[float], travel_z: float) -> list[list[float]]:
+        """Straight legs: vertical to travel_z over the start, across at travel_z, vertical onto target."""
         start = list(self.xyz)
-        path: list[list[float]] = []
+        legs: list[list[float]] = []
         previous = start
         for waypoint in ([start[0], start[1], travel_z], [target[0], target[1], travel_z], list(target)):
-            pieces = math.ceil(math.dist(previous, waypoint) / GOTO_SEGMENT_MM - 1e-9)
-            for k in range(1, pieces + 1):
-                path.append([round(previous[i] + (waypoint[i] - previous[i]) * k / pieces, 4)
-                             for i in range(3)])
+            waypoint = [round(v, 4) for v in waypoint]
+            if math.dist(previous, waypoint) > 1e-6:
+                legs.append(waypoint)
             previous = waypoint
-        return path
+        return legs
+
+    def check_route(self, legs: Sequence[Sequence[float]]) -> list[list[float]]:
+        """Check every leg every LINE_CHECK_MM before anything moves; returns each leg's end joints.
+
+        A leg is then sent as one MovL, so the controller runs it as one continuous straight line;
+        the samples catch unreachable stretches, IK branch switches and the wrist singularity
+        along the way, not only at the end.
+        """
+        seed, previous, finals = list(self.joints), list(self.xyz), []
+        for leg in legs:
+            pieces = max(1, math.ceil(math.dist(previous, leg) / LINE_CHECK_MM - 1e-9))
+            for k in range(1, pieces + 1):
+                point = [round(previous[i] + (leg[i] - previous[i]) * k / pieces, 4) for i in range(3)]
+                try:
+                    seed = self.check(point, self.rpy, seed)
+                except JogRefused as refusal:
+                    raise JogRefused(f"在 {[round(v, 1) for v in point]} 处{refusal}") from refusal
+            finals.append(list(seed))
+            previous = list(leg)
+        return finals
+
+    def run_route(self, legs: Sequence[Sequence[float]], finals: Sequence[Sequence[float]],
+                  progress: Callable[[dict[str, Any]], None] | None = None) -> None:
+        """One MovL per checked leg; progress gets every polled state while the arm moves."""
+        for leg, joints in zip(legs, finals):
+            self.arm.move(list(leg), list(self.rpy), list(joints))
+            try:
+                self.arm.wait(list(leg), list(self.rpy), list(joints), self.stop_pressed, progress)
+            finally:
+                self.discard_keys()
+            self.xyz, self.joints = list(leg), list(joints)
 
     def goto_corner(self) -> None:
         """t: hover above the fit's predicted corner; the operator still aligns to the real one."""
@@ -549,28 +587,50 @@ class Jog:
         if corner in self.targets.fit_ids:
             self.out(f"注意：角点 {corner} 参与了本臂拟合，不能当独立验收点")
         hover = [predicted[0], predicted[1], round(predicted[2] + GOTO_HOVER_MM, 4)]
-        failures = []
-        for clearance in GOTO_CLEARANCES_MM:
-            travel_z = round(hover[2] + clearance, 4)
-            path = self.travel_path(hover, travel_z)
-            seed = list(self.joints)
-            try:
-                for point in path:  # every piece is checked before anything moves
-                    seed = self.check(point, self.rpy, seed)
-            except JogRefused as refusal:
-                failures.append(f"Z={travel_z:.1f} 平移：在 {[round(v, 1) for v in point]} 处{refusal}")
-                continue
-            break
-        else:
-            raise JogRefused(f"角点 {corner}（预测 {[round(v, 1) for v in predicted]}）各平移高度都不可达；"
-                             + "；".join(failures) + "。可先手动移近一些再按 t")
+        legs, finals, travel_z = self._plan_travel(hover, f"角点 {corner}（预测 {[round(v, 1) for v in predicted]}）", "t")
         self.out(f"角点 {corner} 预测位置 X={predicted[0]:.2f} Y={predicted[1]:.2f} Z={predicted[2]:.2f}；"
                  f"先在原地{'下降' if travel_z < self.xyz[2] else '抬升'}到 Z={travel_z:.1f}，平移后下降到"
-                 f"其上方 {GOTO_HOVER_MM:.0f} mm（{len(path)} 段直线）。平移路线上不要有杯子等物体")
-        for point in path:
-            self.go(point, self.rpy, report=False)
+                 f"其上方 {GOTO_HOVER_MM:.0f} mm（{len(legs)} 段连续直线）。平移路线上不要有杯子等物体")
+        self.run_route(legs, finals)
         self.out(f"已到角点 {corner} 上方 | {self.status()}\n"
                  "先看指尖和真实角点是否对齐，对不齐就平移修正，再下降触碰")
+
+    def _plan_travel(self, target: Sequence[float], label: str,
+                     key: str) -> tuple[list[list[float]], list[list[float]], float]:
+        """Lowest-risk reachable route: try crossing heights above the target, check every leg first."""
+        failures = []
+        for clearance in GOTO_CLEARANCES_MM:
+            travel_z = round(target[2] + clearance, 4)
+            legs = self.travel_legs(target, travel_z)
+            try:
+                finals = self.check_route(legs)
+            except JogRefused as refusal:
+                failures.append(f"Z={travel_z:.1f} 平移：{refusal}")
+                continue
+            return legs, finals, travel_z
+        raise JogRefused(f"{label}各平移高度都不可达；" + "；".join(failures) + f"。可先手动移近一些再按 {key}")
+
+    def goto_point(self) -> None:
+        """x: travel to a typed base XYZ with the locked orientation, e.g. a vision hover point."""
+        tilt = down_tilt_deg(self.rpy)
+        if tilt > GOTO_TILT_LIMIT_DEG:
+            raise JogRefused(f"工具偏离竖直 {tilt:.2f}°，先按 v 摆正再用 x")
+        text = self.ask("目标 X Y Z（mm，基座系，空格或逗号分隔，回车取消）: ").strip()
+        if not text:
+            self.out("已取消")
+            return
+        try:
+            target = [round(float(value), 4) for value in text.replace(",", " ").split()]
+        except ValueError as error:
+            raise JogRefused("坐标必须是三个数字") from error
+        if len(target) != 3 or not all(math.isfinite(value) for value in target):
+            raise JogRefused("坐标必须是三个数字")
+        legs, finals, travel_z = self._plan_travel(target, f"目标 {target}", "x")
+        self.out(f"移到 X={target[0]:.2f} Y={target[1]:.2f} Z={target[2]:.2f}：先在原地"
+                 f"{'下降' if travel_z < self.xyz[2] else '抬升'}到 Z={travel_z:.1f}，平移后下降"
+                 f"（{len(legs)} 段连续直线，姿态不变）。平移路线上不要有物体")
+        self.run_route(legs, finals)
+        self.out(f"已到目标 | {self.status()}")
 
     def handle(self, key: str) -> bool:
         """Process one key; False means quit."""
@@ -590,6 +650,8 @@ class Jog:
                 self.record()
             elif key == "t":
                 self.goto_corner()
+            elif key == "x":
+                self.goto_point()
             elif key in ("o", "c", "g"):
                 self.gripper(key)
             elif key == "z":

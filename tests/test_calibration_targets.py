@@ -41,6 +41,32 @@ def make_session(directory: Path, *, usable=True, fit_ids=(0, 1, 2)) -> Path:
     return session
 
 
+class CheckedArm(SimArm):
+    """Records every point the controller is asked to solve, i.e. every check along a leg."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.checked = []
+
+    def plan(self, xyz, rpy, seed):
+        self.checked.append([round(v, 4) for v in xyz])
+        return super().plan(xyz, rpy, seed)
+
+
+def assert_straight_checked_legs(case, arm, start):
+    """Each MovL is one axis-aligned straight leg, and the leg was checked at most 10 mm apart."""
+    previous = list(start)
+    for target, _ in arm.sent:
+        moving = [abs(target[i] - previous[i]) > 1e-6 for i in range(3)]
+        case.assertTrue(moving == [False, False, True] or not moving[2], (previous, target))  # vertical or level
+        on_leg = [p for p in arm.checked if math.dist(previous, p) + math.dist(p, target)
+                  <= math.dist(previous, target) + 1e-6]
+        stops = sorted([previous, *on_leg], key=lambda p: math.dist(previous, p))
+        case.assertTrue(all(math.dist(a, b) <= 10.0 + 1e-6 for a, b in zip(stops, stops[1:])), (previous, target))
+        case.assertIn(target, on_leg)
+        previous = target
+
+
 class Targets:
     """Stand-in for ArmFit with a corner far from the start."""
     fit_ids = frozenset({0})
@@ -124,19 +150,15 @@ class SessionTargetTests(unittest.TestCase):
 class GotoCornerTests(unittest.TestCase):
     """t must hover above the target, never cut through the board, and send nothing if any piece fails."""
 
-    def test_goto_rises_crosses_then_descends_in_short_pieces(self):
-        jog, arm, lines = make_jog(answers=("5",))
+    def test_goto_moves_in_continuous_straight_legs_checked_every_10_mm(self):
+        arm = CheckedArm([-150.0, -350.0, 200.0], DOWN)
+        jog, arm, lines = make_jog(arm=arm, answers=("5",))
         jog.handle("t")
         targets = [xyz for xyz, _ in arm.sent]
-        self.assertEqual(targets[-1], [-100.0, -400.0, 140.0])  # 20 mm above the corner
+        # Start height 200 = hover 140 + 60, so: across at 200 in one MovL, then down in one MovL.
+        self.assertEqual(targets, [[-100.0, -400.0, 200.0], [-100.0, -400.0, 140.0]])
         self.assertTrue(all(rpy == DOWN for _, rpy in arm.sent))
-        previous = [-150.0, -350.0, 200.0]
-        for point in targets:
-            self.assertLessEqual(math.dist(previous, point), 20.0 + 1e-6)
-            previous = point
-        # Horizontal travel happens at the start height; the descent is straight down at the end.
-        lowest_before_arrival = min(z for x, y, z in targets if (x, y) != (-100.0, -400.0))
-        self.assertEqual(lowest_before_arrival, 200.0)
+        assert_straight_checked_legs(self, arm, [-150.0, -350.0, 200.0])
         self.assertIn("对齐", lines[-1])
 
     def test_goto_from_below_lifts_first(self):
@@ -157,10 +179,8 @@ class GotoCornerTests(unittest.TestCase):
         jog, arm, lines = make_jog(arm=LowReach([-150.0, -350.0, 300.0], DOWN), answers=("5",))
         jog.handle("t")
         targets = [xyz for xyz, _ in arm.sent]
-        self.assertTrue(all(xy == [-150.0, -350.0] for *xy, _ in targets[:5]))  # straight down first
-        crossing = {z for x, y, z in targets if (x, y) not in ((-150.0, -350.0), (-100.0, -400.0))}
-        self.assertEqual(crossing, {160.0})  # 60 and 40 mm crossings were unreachable
-        self.assertEqual(targets[-1], [-100.0, -400.0, 140.0])
+        # Straight down over the start, across at 160 (60 and 40 mm crossings unreachable), down.
+        self.assertEqual(targets, [[-150.0, -350.0, 160.0], [-100.0, -400.0, 160.0], [-100.0, -400.0, 140.0]])
         self.assertTrue(any("下降到 Z=160.0" in line for line in lines))
 
     def test_any_failing_piece_means_nothing_moves(self):
@@ -178,6 +198,22 @@ class GotoCornerTests(unittest.TestCase):
         low, low_arm, low_lines = make_jog(answers=("5",), z_min=150.0)  # hover below the floor
         low.handle("t")
         self.assertEqual(low_arm.sent, [])
+        self.assertIn("下限", low_lines[-1])
+
+    def test_x_goes_to_a_typed_point_by_the_same_checked_route(self):
+        arm = CheckedArm([-150.0, -350.0, 200.0], DOWN)
+        jog, arm, lines = make_jog(arm=arm, answers=("-120, -380 180",), targets=None)
+        jog.handle("x")
+        self.assertEqual(arm.sent[-1][0], [-120.0, -380.0, 180.0])
+        self.assertEqual(len(arm.sent), 3)  # up to 240, across, down: three continuous legs
+        self.assertTrue(all(rpy == DOWN for _, rpy in arm.sent))
+        assert_straight_checked_legs(self, arm, [-150.0, -350.0, 200.0])
+        bad, bad_arm, bad_lines = make_jog(answers=("1 2",), targets=None)
+        bad.handle("x")
+        low, low_arm, low_lines = make_jog(answers=("-120 -380 90",), targets=None)  # below the floor
+        low.handle("x")
+        self.assertEqual(bad_arm.sent + low_arm.sent, [])
+        self.assertIn("三个数字", bad_lines[-1])
         self.assertIn("下限", low_lines[-1])
 
     def test_goto_needs_a_session_a_down_tool_and_a_valid_id(self):
