@@ -91,6 +91,14 @@ JOG_STOP_HORIZON_S = 0.25   # look this far ahead at the measured speed before a
 JOG_STOP_MARGIN_MM = 3.0    # and never closer than this
 SETTLE_TOL_MM = 0.05
 ORIENTATION_DRIFT_WARN_DEG = 0.5
+GOTO_HOVER_MM = 20.0        # t key: stop this far above the predicted corner
+# Travel heights above the hover point, tried in order. Home is ~415 mm up, where the far
+# corners are out of reach, so t first changes height over the start XY, crosses at
+# hover + clearance, then lowers onto the hover point. Lower crossings are tried only
+# when a higher one is unreachable.
+GOTO_CLEARANCES_MM = (60.0, 40.0, 20.0, 0.0)
+GOTO_SEGMENT_MM = 20.0      # and travel in checked MovL pieces no longer than this
+GOTO_TILT_LIMIT_DEG = 1.0   # t needs the tool already snapped down (v)
 
 # RobotMode values from the Dobot TCP/IP protocol (V3 controller).
 ROBOT_MODES = {1: "初始化", 2: "抱闸松开", 3: "未上电", 4: "未使能", 5: "使能空闲", 6: "拖动",
@@ -120,6 +128,8 @@ HELP = """\
   1/2/3/4      步长 0.1 / 1 / 5 / 10 mm
   v            把工具摆成竖直朝下（偏差 ≤ 15° 才允许）
   p            记录当前 TCP 为标定角点（写入 CSV）
+  t            输入角点编号，移到拟合预测位置正上方 20 mm（需 --session；原地升降到棋盘上方约 80 mm 再平移再下降）
+               到了以后必须自己看准真实角点、平移修正后再下降，不能直接按预测位置记录
   z            把 Z 下限设到当前高度下 0.5 mm（尖端刚碰到棋盘时按）
   i            显示当前状态        h  显示本帮助
   q 或 Esc     退出（下使能；不会断电）
@@ -444,8 +454,9 @@ class Jog:
                  held_moves: Callable[[], set[str]] = set,
                  clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep,
-                 servo_speed: float = 10 * SERVO_MM_S_PER_PERCENT):
+                 servo_speed: float = 10 * SERVO_MM_S_PER_PERCENT, targets: Any = None):
         state = arm.read()
+        self.targets = targets
         self.held_moves = held_moves
         self.clock = clock
         self.sleep = sleep
@@ -492,7 +503,7 @@ class Jog:
             raise JogRefused(f"正解复核不一致：{position_error:.3f} mm / {orientation_error:.3f}°")
         return joints
 
-    def go(self, xyz: Sequence[float], rpy: Sequence[float]) -> None:
+    def go(self, xyz: Sequence[float], rpy: Sequence[float], *, report: bool = True) -> None:
         joints = self.check(xyz, rpy)
         self.arm.move(list(xyz), list(rpy), joints)
         try:
@@ -501,7 +512,65 @@ class Jog:
             self.discard_keys()
         self.xyz, self.rpy, self.joints = list(xyz), list(rpy), list(joints)
         error = max(abs(state["pose"][i] - xyz[i]) for i in range(3))
-        self.out(f"到达，实测偏差 {error:.3f} mm | {self.status()}")
+        if report:
+            self.out(f"到达，实测偏差 {error:.3f} mm | {self.status()}")
+
+    def travel_path(self, target: Sequence[float], travel_z: float) -> list[list[float]]:
+        """Vertical to travel_z over the start, across at travel_z, then vertical onto target."""
+        start = list(self.xyz)
+        path: list[list[float]] = []
+        previous = start
+        for waypoint in ([start[0], start[1], travel_z], [target[0], target[1], travel_z], list(target)):
+            pieces = math.ceil(math.dist(previous, waypoint) / GOTO_SEGMENT_MM - 1e-9)
+            for k in range(1, pieces + 1):
+                path.append([round(previous[i] + (waypoint[i] - previous[i]) * k / pieces, 4)
+                             for i in range(3)])
+            previous = waypoint
+        return path
+
+    def goto_corner(self) -> None:
+        """t: hover above the fit's predicted corner; the operator still aligns to the real one."""
+        if self.targets is None:
+            raise JogRefused("启动时没有给 --session，无法计算角点位置")
+        tilt = down_tilt_deg(self.rpy)
+        if tilt > GOTO_TILT_LIMIT_DEG:
+            raise JogRefused(f"工具偏离竖直 {tilt:.2f}°，先按 v 摆正再用 t")
+        text = self.ask("移到哪个角点上方（编号，回车取消）: ").strip()
+        if not text:
+            self.out("已取消")
+            return
+        if not text.isdigit():
+            raise JogRefused("角点编号必须是非负整数")
+        corner = int(text)
+        try:
+            predicted = self.targets.corner_base_mm(corner)
+        except RuntimeError as error:
+            raise JogRefused(str(error)) from error
+        if corner in self.targets.fit_ids:
+            self.out(f"注意：角点 {corner} 参与了本臂拟合，不能当独立验收点")
+        hover = [predicted[0], predicted[1], round(predicted[2] + GOTO_HOVER_MM, 4)]
+        failures = []
+        for clearance in GOTO_CLEARANCES_MM:
+            travel_z = round(hover[2] + clearance, 4)
+            path = self.travel_path(hover, travel_z)
+            seed = list(self.joints)
+            try:
+                for point in path:  # every piece is checked before anything moves
+                    seed = self.check(point, self.rpy, seed)
+            except JogRefused as refusal:
+                failures.append(f"Z={travel_z:.1f} 平移：在 {[round(v, 1) for v in point]} 处{refusal}")
+                continue
+            break
+        else:
+            raise JogRefused(f"角点 {corner}（预测 {[round(v, 1) for v in predicted]}）各平移高度都不可达；"
+                             + "；".join(failures) + "。可先手动移近一些再按 t")
+        self.out(f"角点 {corner} 预测位置 X={predicted[0]:.2f} Y={predicted[1]:.2f} Z={predicted[2]:.2f}；"
+                 f"先在原地{'下降' if travel_z < self.xyz[2] else '抬升'}到 Z={travel_z:.1f}，平移后下降到"
+                 f"其上方 {GOTO_HOVER_MM:.0f} mm（{len(path)} 段直线）。平移路线上不要有杯子等物体")
+        for point in path:
+            self.go(point, self.rpy, report=False)
+        self.out(f"已到角点 {corner} 上方 | {self.status()}\n"
+                 "先看指尖和真实角点是否对齐，对不齐就平移修正，再下降触碰")
 
     def handle(self, key: str) -> bool:
         """Process one key; False means quit."""
@@ -519,6 +588,8 @@ class Jog:
                 self.snap_down()
             elif key == "p":
                 self.record()
+            elif key == "t":
+                self.goto_corner()
             elif key in ("o", "c", "g"):
                 self.gripper(key)
             elif key == "z":
@@ -829,6 +900,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--servo-speed", type=float,
                         help="斜线连续移动速度 mm/s，默认 --speed × 2（上限 60）")
     parser.add_argument("--record", type=Path, help="角点 CSV 路径，默认 calibration-data/jog-points/")
+    parser.add_argument("--session", type=Path,
+                        help="标定向导会话目录；给了才能用 t 键移到拟合预测的角点上方")
     return parser
 
 
@@ -850,6 +923,17 @@ def main(argv: Sequence[str] | None = None, *, keys: Any = None,
         profile["frame"]["user"] = args.user
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     record = args.record or DEFAULT_RECORD_DIR / f"{args.arm}-{stamp}.csv"
+    targets = None
+    if args.session is not None:
+        from .calibration_targets import TargetError, load_arm_fit
+
+        try:
+            targets = load_arm_fit(args.session, args.arm)
+        except (TargetError, OSError, KeyError, ValueError) as error:
+            out(f"无法读取标定会话：{error}")
+            return 2
+        out(f"t 键目标：{targets.robot_id} 拟合 {targets.job_id}（TCP {targets.tcp_name}，"
+            f"拟合用过的角点 {sorted(targets.fit_ids)}）")
 
     arm: Any = None
     try:
@@ -889,7 +973,7 @@ def main(argv: Sequence[str] | None = None, *, keys: Any = None,
             _windows_keys() if sys.platform == "win32" else _line_keys())
         jog = Jog(arm, limits, record_path=record, ask=ask, out=out,
                   stop_pressed=stop_pressed, discard_keys=discard, held_moves=held,
-                  servo_speed=servo_speed)
+                  servo_speed=servo_speed, targets=targets)
         out(HELP)
         out(jog.status())
         while jog.handle(read_key()):
