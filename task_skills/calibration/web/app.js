@@ -542,6 +542,14 @@ function renderStepNav() {
   });
   byId("prevStep").disabled = state.step <= 1;
   byId("nextStep").disabled = state.step >= 7;
+  // The header buttons scroll away on long pages; the floating pair names where it goes.
+  const name = (step) => document.querySelector(`.step-button[data-step="${step}"] .step-name`)?.textContent || "";
+  const floatPrev = byId("floatPrevStep");
+  const floatNext = byId("floatNextStep");
+  floatPrev.disabled = state.step <= 1;
+  floatNext.disabled = state.step >= 7;
+  setText(floatPrev, state.step > 1 ? `← ${String(state.step - 1).padStart(2, "0")} ${name(state.step - 1)}` : "← 上一步");
+  setText(floatNext, state.step < 7 ? `${String(state.step + 1).padStart(2, "0")} ${name(state.step + 1)} →` : "已是最后一步");
 }
 
 function renderStageVisibility() {
@@ -1211,10 +1219,20 @@ function buildTeachPanel(arm) {
     });
     importInput.value = "";
   });
+  const clearAll = el("button", { type: "button", class: "button ghost", text: `清空${armsCn[arm]}示教点`,
+    disabled: points.length === 0 });
+  clearAll.addEventListener("click", () => {
+    if (!window.confirm(`清空${armsCn[arm]}全部 ${points.length} 个示教点？${armsCn[arm]}的拟合与验收会失效；另一只臂不受影响。`)) return;
+    action("清空示教点", async () => {
+      await saveTeachPoints(arm, []);
+      showToast(`${armsCn[arm]}示教点已清空，可重新导入 CSV。`, "success");
+    });
+  });
   const tableTools = el("div", { class: "inline-actions wrap" },
     saveAll,
     el("label", { class: "button ghost file-button" }, "导入 CSV", importInput),
-    el("a", { class: "button ghost", href: apiUrl(`/arms/${arm}/teach/export`), text: "下载 CSV" })
+    el("a", { class: "button ghost", href: apiUrl(`/arms/${arm}/teach/export`), text: "下载 CSV" }),
+    clearAll
   );
 
   const panel = el("article", { class: "panel teach-panel", "data-arm": arm },
@@ -2154,6 +2172,8 @@ function wireEvents() {
   });
   byId("prevStep").addEventListener("click", () => showStep(state.step - 1));
   byId("nextStep").addEventListener("click", () => showStep(state.step + 1));
+  byId("floatPrevStep").addEventListener("click", () => { showStep(state.step - 1); window.scrollTo({ top: 0 }); });
+  byId("floatNextStep").addEventListener("click", () => { showStep(state.step + 1); window.scrollTo({ top: 0 }); });
   byId("sessionSelect").addEventListener("change", (event) => {
     if (!event.target.value) {
       if (state.session && hasDirtyDrafts()

@@ -216,6 +216,7 @@ code, pre, .mono { font-family: var(--mono); }
 .image-select { display: flex; align-items: center; gap: 6px; min-width: 0; cursor: pointer; }
 .image-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gallery-toolbar { margin-bottom: 10px; align-items: center; }
+.floating-step-nav { position: fixed; right: 24px; bottom: 20px; z-index: 40; display: flex; gap: 8px; padding: 8px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 8px 24px rgba(8, 19, 31, .18); }
 .image-card-title span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-card .mini-select { padding: 4px 6px; font-size: 11px; border: 1px solid var(--line-strong); border-radius: 5px; background: white; }
 .mini-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; color: var(--muted); font-size: 10.5px; }

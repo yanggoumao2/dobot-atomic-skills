@@ -33,7 +33,7 @@ class CalibrationFrontendStateTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0,
                          f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}")
         payload = json.loads(completed.stdout)
-        self.assertEqual(payload["count"], 11, payload)
+        self.assertEqual(payload["count"], 12, payload)
         self.assertEqual(set(payload["passed"]), {
             "reordered load responses",
             "reordered refresh/poll responses",
@@ -45,6 +45,7 @@ class CalibrationFrontendStateTests(unittest.TestCase):
             "same-arm verification draft preservation",
             "query sequence/session binding",
             "query/export dependency invalidation",
+            "visible query invalidation on input",
             "dirty session switch policy",
         })
 
