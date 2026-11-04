@@ -83,9 +83,16 @@ class BimanualAgent(Agent):
 
     def get_keys(self):
         keys = [None, None]
+        errors = [None, None]
 
         def _read(index, agent):
-            keys[index] = agent.get_keys()
+            try:
+                value = np.asarray(agent.get_keys(), dtype=float)
+                if value.shape != (3,) or not np.isfinite(value).all():
+                    raise ValueError(f"expected three finite button values, got shape={value.shape}")
+                keys[index] = value
+            except Exception as exc:
+                errors[index] = exc
 
         threads = [
             threading.Thread(target=_read, args=(0, self.agent_left), daemon=True),
@@ -93,6 +100,12 @@ class BimanualAgent(Agent):
         ]
         for thread in threads:
             thread.start()
-        for thread in threads:
-            thread.join()
-        return np.array(keys)
+        deadline = time.monotonic() + 1.5
+        for index, thread in enumerate(threads):
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            side = "LEFT" if index == 0 else "RIGHT"
+            if thread.is_alive():
+                raise RuntimeError(f"{side} master button read timed out")
+            if errors[index] is not None:
+                raise RuntimeError(f"{side} master button read failed: {errors[index]}") from errors[index]
+        return np.stack(keys)

@@ -50,9 +50,11 @@ class DobotRobot(Robot):
                                         id_name=self.gripper_id_name,
                                         servo_pos=self.gripper_list)
             print("gripper connected")
-            self.gripper.move(0, 100, 1)
-            time.sleep(0.3)
-            self.gripper.move(255, 100, 1)
+            channel = self.com_list[robot_ip]
+            print(f"[GRIPPER START] {channel} ip={robot_ip} "
+                  f"port={gripper_dict[channel].port} id={self.gripper_id_name}", flush=True)
+            self._initialize_gripper()
+            print(f"[GRIPPER DONE] {channel}; next channel may now start", flush=True)
 
         self._free_drive = False  # 拖拽模式
         self.r_inter.StopDrag()  # 关闭拖拽
@@ -70,6 +72,25 @@ class DobotRobot(Robot):
         # with the ServoJ RPC and dominated the per-arm follow latency.
         self._last_gripper_cmd = None
         self._start_reading_thread()
+
+    def _initialize_gripper(self):
+        # launch_nodes constructs LEFT then RIGHT. Wait for each endpoint so
+        # the next gripper cannot start while this one's cycle is unfinished.
+        for target in (0, 255):
+            print(f"[GRIPPER MOVE] target={target} speed=10", flush=True)
+            self.gripper.move(target, 10, 1)
+            deadline = time.monotonic() + 10.0
+            while True:
+                position = self.gripper.get_current_position()
+                if abs(position - target) <= 5:
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Startup gripper did not reach {target} within 10s "
+                        f"(position={position}); subsequent startup is aborted"
+                    )
+                time.sleep(0.1)
+            time.sleep(0.5)  # visible pause at each endpoint
 
     def _start_reading_thread(self):
         self._reading_thread = Thread(target=self.get_robot_err)

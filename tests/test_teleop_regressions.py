@@ -385,10 +385,10 @@ class MasterRunawayGuardTests(unittest.TestCase):
 
     def test_pose_protection_uses_crossed_nova_flags(self):
         positions = {
-            "left_left": np.array([-0.5, -0.3, 0.1]),
-            "left_right": np.array([-0.5, -0.3, 0.1]),
-            "right_left": np.array([0.0, -0.3, 0.1]),
-            "right_right": np.array([0.0, -0.3, 0.1]),
+            "left_left": np.array([-0.5, -0.4, 0.1]),
+            "left_right": np.array([-0.5, -0.4, 0.1]),
+            "right_left": np.array([0.0, -0.4, 0.1]),
+            "right_right": np.array([0.0, -0.4, 0.1]),
         }
         velocities = {key: np.zeros(3) for key in positions}
 

@@ -186,11 +186,12 @@ def obs_action_check(env, agent):
 def master_to_nova_action(action):
     """Convert master order to crossed Nova target order.
 
-    Master order: left, right.
+    Master order: HAND_LEFT (COM6), HAND_RIGHT (COM5).
     Nova target order: left Nova, right Nova.
-    Physical wiring requires: right master -> left Nova and
-    left master -> right Nova. Gripper entries stay normalized [0, 1].
-    Their verified startup poses match in this crossed pairing (left master
+    Configured routing: HAND_RIGHT -> left Nova and
+    HAND_LEFT -> right Nova. Config labels are NOT physical side evidence.
+    Gripper entries stay normalized [0, 1].
+    Configured reference poses match in this crossed pairing (HAND_LEFT
     and right Nova both start at ~[-90,0,-90,0,+90,+90] deg; right master and
     left Nova both start at ~[+90,0,+90,0,-90,-90] deg), so no sign inversion
     is applied here. A direct straight-through mapping would flip J3/J5/J6.
@@ -216,7 +217,7 @@ def master_to_nova_flags(master_flags):
 
 
 def master_to_nova_gripper_flags(master_flags):
-    """Keep gripper flags on the same physical left/right side."""
+    """Keep gripper flags in config-channel order; physical routing needs verification."""
     flags = np.asarray(master_flags).copy()
     if flags.shape != (2,):
         raise ValueError(f"Expected two master flags, got shape {flags.shape}")
@@ -229,7 +230,7 @@ def apply_same_side_gripper_targets(
     last_action,
     gripper_flags,
 ):
-    """Apply physical same-side master grippers to Nova target channels."""
+    """Apply config-channel gripper mapping; physical placement is verified onsite."""
     result = np.asarray(action, dtype=float).copy()
     crossed_master_action = np.asarray(crossed_master_action, dtype=float)
     last_action = np.asarray(last_action, dtype=float)
@@ -241,8 +242,8 @@ def apply_same_side_gripper_targets(
     if flags.shape != (2,):
         raise ValueError(f"Expected two gripper flags, got shape {flags.shape}")
 
-    # crossed_master_action[13] is the physical left master gripper;
-    # crossed_master_action[6] is the physical right master gripper.
+    # crossed_master_action[13] is the HAND_LEFT master gripper;
+    # crossed_master_action[6] is the HAND_RIGHT master gripper.
     for target_index, source_index, enabled in (
         (6, 13, bool(flags[0])),
         (13, 6, bool(flags[1])),

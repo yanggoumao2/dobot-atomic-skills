@@ -4,6 +4,14 @@ from typing import List
 
 import numpy as np
 
+# On this rig, forward from the Nova bases toward the operator is taken as
+# negative base Y. Shift the existing allowed region by 150 mm; retain its
+# width, X bounds and table clearance. Confirm this direction onsite.
+WORKSPACE_X_RANGES_MM = {"left": (-450, 300), "right": (-250, 450)}
+WORKSPACE_Y_SHIFT_MM = -150
+WORKSPACE_Y_RANGE_MM = tuple(y + WORKSPACE_Y_SHIFT_MM for y in (-750, -160))
+WORKSPACE_Z_MIN_MM = 40
+
 
 def is_within_safe_position(position, x_range, y_range, z_min):
     return (
@@ -11,6 +19,11 @@ def is_within_safe_position(position, x_range, y_range, z_min):
         and y_range[0] <= position[1] <= y_range[1]
         and position[2] > z_min
     )
+
+
+def is_within_workspace(position_mm, side):
+    return is_within_safe_position(position_mm, WORKSPACE_X_RANGES_MM[side],
+                                   WORKSPACE_Y_RANGE_MM, WORKSPACE_Z_MIN_MM)
 
 
 def check_pose_protection(positions, velocities, nova_flags):
@@ -23,12 +36,11 @@ def check_pose_protection(positions, velocities, nova_flags):
     warnings = []
     positions_mm = {key: value * 1000 for key, value in positions.items()}
     sides = (
-        ("left", bool(flags[0]), (-450, 300)),
-        ("right", bool(flags[1]), (-250, 450)),
+        ("left", bool(flags[0])),
+        ("right", bool(flags[1])),
     )
-    y_range = (-750, -160)
 
-    for side, active, x_range in sides:
+    for side, active in sides:
         if not active:
             continue
         tip_names = (f"{side}_left", f"{side}_right")
@@ -39,12 +51,7 @@ def check_pose_protection(positions, velocities, nova_flags):
             warnings.append(f"delta_{tip_names[0]}: {velocities[tip_names[0]][2]}")
             protected = True
         if not all(
-            is_within_safe_position(
-                positions_mm[name],
-                x_range,
-                y_range,
-                40,
-            )
+            is_within_workspace(positions_mm[name], side)
             for name in tip_names
         ):
             warnings.append(f"[Warn]:The {side} arm is out of the safe zone!")
