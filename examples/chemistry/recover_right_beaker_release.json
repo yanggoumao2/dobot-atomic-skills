@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0.0",
+  "name": "recover_right_beaker_release",
+  "description": "Recovery after right_beaker_release failed with a gripper serial error (2026-11-12): the right arm stands at right.beaker.grasp with the jaw around the beaker. Open the jaw in place, retreat straight out to right.beaker.approach, then home both arms. Never home the right arm directly from the grasp pose: a joint move with the jaw around the beaker can drag it.",
+  "nodes": [
+    {
+      "id": "right_beaker_release",
+      "skill": "gripper.set_position",
+      "version": "1.0.0",
+      "arm": "right",
+      "parameters": {"position": 255, "allow_release": true, "at_ref": "right.beaker.grasp"},
+      "depends_on": []
+    },
+    {
+      "id": "right_beaker_retreat",
+      "skill": "arm.move_linear",
+      "version": "1.0.0",
+      "arm": "right",
+      "parameters": {"source_ref": "right.beaker.grasp", "target_ref": "right.beaker.approach", "grip_requirement": "open"},
+      "depends_on": ["right_beaker_release"]
+    },
+    {
+      "id": "right_arm_home",
+      "skill": "arm.move_to_home",
+      "version": "1.0.0",
+      "arm": "right",
+      "parameters": {},
+      "depends_on": ["right_beaker_retreat"]
+    },
+    {
+      "id": "left_arm_home",
+      "skill": "arm.move_to_home",
+      "version": "1.0.0",
+      "arm": "left",
+      "parameters": {},
+      "depends_on": ["right_beaker_retreat"]
+    }
+  ]
+}
