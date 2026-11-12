@@ -1,6 +1,7 @@
 """One execution owner behind both single-push and two-phase protocols."""
 
 import copy
+import hashlib
 import json
 import os
 import threading
@@ -16,6 +17,12 @@ from .upstream import DeliveryWorker
 
 
 ENVELOPE_KEYS = {"graph", "package", "request_id"}
+# Partner spec 7.2 always sends these on direct push; only null is supported.
+RESUME_KEYS = {"resume_from_node_id", "execution_id"}
+
+
+def _short_hash(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:40]
 
 
 def bare_package(body):
@@ -36,7 +43,7 @@ def bare_package(body):
 class Gateway:
     def __init__(self, scene, directory, mode="mock", allow_live=False, upstream=None,
                  adapter_factory=None, lease_path=None, reservation_seconds=60,
-                 results_delivery=None):
+                 results_delivery=None, publish_catalog_snapshot=False):
         if mode not in {"mock", "live"}:
             raise ValueError("Mode must be mock or live")
         if mode == "live" and (not allow_live or os.name != "nt"):
@@ -64,7 +71,9 @@ class Gateway:
         self._result_capture_errors = {}
         self.closed = False
         self.store.recover(mode == "live")
-        self.delivery = DeliveryWorker(self.store, upstream)
+        # A partner snapshot REPLACES their whole device+skill catalog (spec 5.2), so
+        # publishing is opt-in; by default only /catalog/validate is sent.
+        self.delivery = DeliveryWorker(self.store, upstream, publish_snapshots=publish_catalog_snapshot)
         self.delivery.publish_catalog(self.catalog)
         for device in self.catalog.snapshot()["devices"]:
             self.store.device_event(device["device_id"], "idle" if mode == "mock" else "offline", mode=mode)
@@ -293,14 +302,29 @@ class Gateway:
             self.worker.start()
             return self._response(record)
 
-    def submit_new_execution(self, body):
-        """Submit a fresh execution of a direct package with server-generated keys."""
+    def submit_new_execution(self, body, key=None):
+        """Direct push (`POST /v1/execute-graph`), shaped by the partner spec section 7.2.
+
+        The compiler sends ``{"graph", "resume_from_node_id", "execution_id", "request_id"}``
+        plus an ``Idempotency-Key`` header. Resume is not supported, so the two resume
+        fields are accepted only when null. With a request key (header first, else
+        ``request_id``) the request is idempotent per spec 9.2: a retry with the same key
+        returns the original execution and never moves the arm twice. Without any key
+        every POST is a new execution.
+
+        Node invocation keys are always server-derived. With a request key they are a
+        hash of that key, so a retry reproduces the same package and a new dispatch of
+        the same compiled run (new request_id, same node keys) still runs.
+        """
         if not isinstance(body, dict):
             raise ContractError("INVALID_REQUEST", "Request must be a JSON object", status=400)
         if bare_package(body) is not None:
-            return self.submit_new_execution({"package": body})
-        if set(body) - ENVELOPE_KEYS:
-            raise ContractError("INVALID_REQUEST", "Repeat accepts only graph/package and optional request_id", status=400)
+            return self.submit_new_execution({"package": body}, key)
+        if set(body) - ENVELOPE_KEYS - RESUME_KEYS:
+            raise ContractError("INVALID_REQUEST", "Direct push accepts graph/package, request_id and null resume fields", status=400)
+        for field in RESUME_KEYS:
+            if body.get(field) is not None:
+                raise ContractError("INVALID_REQUEST", field + " is not supported; resume is not implemented", status=400)
         if "graph" in body and "package" in body:
             raise ContractError("INVALID_REQUEST", "Supply graph or package, not both", status=400)
         package = body.get("graph", body.get("package"))
@@ -308,15 +332,23 @@ class Gateway:
             raise ContractError("MISSING_EXECUTION_PACKAGE", "A complete execution package is required")
         if "request_id" in body:
             identifier(body["request_id"], "request_id")
+        if key is not None:
+            identifier(key, "Idempotency-Key")
+        request_key = key or body.get("request_id")
 
         # Validate the caller's package before changing any idempotency data. Catalog.validate
         # also returns a deep copy, so caller-owned request data remains untouched.
         plan = self.catalog.validate(package, check_state=False)
         repeated_package = copy.deepcopy(plan.package)
-        dispatch_key = "repeat-" + uuid4().hex
+        if request_key is None:
+            dispatch_key = "repeat-" + uuid4().hex
+            node_key = lambda node_id: "repeat-" + uuid4().hex
+        else:
+            dispatch_key = "push-" + _short_hash(request_key)
+            node_key = lambda node_id: "push-" + _short_hash(request_key + "\0" + node_id)
         for node in repeated_package["nodes"]:
             if node["node_type"] == "action":
-                node["skill_invocation"]["idempotency_key"] = "repeat-" + uuid4().hex
+                node["skill_invocation"]["idempotency_key"] = node_key(node["node_id"])
         return self.submit({"graph": repeated_package, "request_id": dispatch_key}, dispatch_key)
 
     @staticmethod

@@ -9,6 +9,15 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from ..graph import utc_now
 from .contracts import ContractError, canonical
+from .partner_wire import to_partner
+
+
+SNAPSHOT_PATH = "/v1/integrations/catalog/snapshots"
+
+
+def _is_event_path(path):
+    return path == "/v1/integrations/device-state-events" or (
+        path.startswith("/v1/executions/") and path.endswith("/events"))
 
 
 class NoRedirects(HTTPRedirectHandler):
@@ -53,8 +62,10 @@ class Upstream:
 
 
 class DeliveryWorker:
-    def __init__(self, store, upstream, interval=0.5):
+    def __init__(self, store, upstream, interval=0.5, publish_snapshots=False):
         self.store, self.upstream, self.interval = store, upstream, interval
+        self.publish_snapshots = publish_snapshots
+        self.demo_events = False  # set by DemoOverrideGateway
         self.stop = threading.Event()
         self.thread = None
         self.lock = threading.Lock()
@@ -63,8 +74,10 @@ class DeliveryWorker:
         snapshot = catalog.snapshot()
         snapshot["generated_at"] = utc_now()
         revision = snapshot["catalog_revision"]
-        for stage, path in (("validate", "/v1/integrations/catalog/validate"),
-                            ("snapshots", "/v1/integrations/catalog/snapshots")):
+        stages = [("validate", "/v1/integrations/catalog/validate")]
+        if self.publish_snapshots:
+            stages.append(("snapshots", SNAPSHOT_PATH))
+        for stage, path in stages:
             self.store.enqueue("catalog:" + revision, path, snapshot, revision + ":" + stage)
 
     def pump(self):
@@ -75,8 +88,12 @@ class DeliveryWorker:
             for item in self.store.pending_deliveries():
                 if self.stop.is_set():
                     break
+                if item["path"] == SNAPSHOT_PATH and not self.publish_snapshots:
+                    # Queued by an older run; never replace the partner's catalog unasked.
+                    continue
                 try:
-                    result = self.upstream.request(item["path"], json.loads(item["body"]))
+                    result = self.upstream.request(item["path"], to_partner(item["path"], json.loads(item["body"]),
+                                                                            demo=self.demo_events))
                     if not isinstance(result, dict) or ("accepted" in result and result["accepted"] is not True) or "code" in result:
                         self.store.delivery_result(item["id"], False, "UPSTREAM_REJECTED")
                         continue
@@ -85,6 +102,12 @@ class DeliveryWorker:
                         self.store.delivery_result(item["id"], False, "UPSTREAM_BLOCKING_DIAGNOSTIC")
                         continue
                 except HTTPError as error:
+                    if error.code == 409 and _is_event_path(item["path"]):
+                        # event_id is the spec's dedupe key: 409 on an event means the
+                        # receiver already has it (a retry after a lost acknowledgement).
+                        self.store.delivery_result(item["id"], True)
+                        delivered += 1
+                        continue
                     # 404 can occur until dispatch registers the returned execution_id.
                     self.store.delivery_result(item["id"], False, "HTTP_" + str(error.code))
                 except (URLError, TimeoutError, ValueError, OSError, RecursionError, HTTPException) as error:

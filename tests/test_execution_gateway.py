@@ -206,20 +206,25 @@ class GatewayTests(unittest.TestCase):
         graph = package(self.gateway.catalog.revision, "fresh-static")
         graph["run_id"] = "run-fresh-static"
         original = copy.deepcopy(graph)
-        body = {"graph": graph, "request_id": "fixed-body-request"}
+        # Partner spec 7.2 envelope: resume fields are always present, null here.
+        body = {"graph": graph, "request_id": "dispatch-1", "resume_from_node_id": None, "execution_id": None}
 
-        code, first = self.request("/v1/execute-graph", body, "fixed-header-key")
+        code, first = self.request("/v1/execute-graph", body, "dispatch-1")
         self.assertEqual(code, 202)
         self.assertEqual(self.finish(first["execution_id"])["status"], "succeeded")
         first_package = self.gateway.store.get(first["execution_id"])["package"]
         first_keys = [node["skill_invocation"]["idempotency_key"] for node in first_package["nodes"]
                       if node["node_type"] == "action"]
 
-        code, blocked = self.request("/v1/execute-graph", body, "fixed-header-key")
-        self.assertEqual((code, blocked["code"]), (422, "INVALID_OBJECT_STATE"))
+        # Spec 9.2: a retry with the same key is the same execution, not a second motion.
+        code, retried = self.request("/v1/execute-graph", body, "dispatch-1")
+        self.assertEqual(code, 202)
+        self.assertEqual(retried["execution_id"], first["execution_id"])
 
+        # A new dispatch of the same compiled run (same node keys, new request key) runs.
         self.reset_mock_scene()
-        code, second = self.request("/v1/execute-graph", body, "fixed-header-key")
+        body = dict(body, request_id="dispatch-2")
+        code, second = self.request("/v1/execute-graph", body, "dispatch-2")
         self.assertEqual(code, 202)
         self.assertEqual(self.finish(second["execution_id"])["status"], "succeeded")
         second_package = self.gateway.store.get(second["execution_id"])["package"]
@@ -256,7 +261,11 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(code, 202)
         try:
             self.assertTrue(entered.wait(2), "Execution did not reach the held action")
-            code, blocked = self.request("/v1/execute-graph", body, "same-header-key")
+            # Same key while running: the original execution, no second worker.
+            code, again = self.request("/v1/execute-graph", body, "same-header-key")
+            self.assertEqual((code, again["execution_id"]), (202, first["execution_id"]))
+            # A different key while running is a real second request: refused.
+            code, blocked = self.request("/v1/execute-graph", dict(body, request_id="other"), "other")
             self.assertEqual((code, blocked["code"]), (409, "RESOURCE_CONFLICT"))
             self.assertEqual(self.gateway.active, first["execution_id"])
         finally:
@@ -904,7 +913,9 @@ class GatewayTests(unittest.TestCase):
                     break
             self.assertEqual(self.gateway.store.delivery_status()["pending"], 0)
             paths = [p for p, _ in compiler.received]
-            self.assertIn("/v1/integrations/catalog/snapshots", paths)
+            self.assertIn("/v1/integrations/catalog/validate", paths)
+            # Publishing a snapshot replaces the partner's catalog; it is opt-in.
+            self.assertNotIn("/v1/integrations/catalog/snapshots", paths)
             events = [b for p, b in compiler.received if "/executions/" in p]
             self.assertEqual(events[0]["event_id"], events[1]["event_id"])
             unique = {e["event_id"]: e for e in events}

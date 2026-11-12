@@ -136,7 +136,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if method == "POST" and path == "/device-gateway/v1/execution-plans/validate":
             return 200, gateway.preflight(body, key)
         if method == "POST" and path == "/v1/execute-graph":
-            return 202, gateway.submit_new_execution(body)
+            return 202, gateway.submit_new_execution(body, key)
         if method == "POST" and path in {"/v1/execute-graph/idempotent", "/device-gateway/v1/executions"}:
             return 202, gateway.submit(body, key, two_phase=path.startswith("/device-gateway/"))
         for prefix in ("/v1/executions/", "/device-gateway/v1/executions/"):

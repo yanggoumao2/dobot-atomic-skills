@@ -21,6 +21,8 @@ def main(argv=None):
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--compiler-url")
     parser.add_argument("--results-url", help="Independent provisional 3.3 receiver base URL")
+    parser.add_argument("--publish-catalog-snapshot", action="store_true",
+                        help="also POST /catalog/snapshots; this REPLACES the compiler's whole catalog")
     parser.add_argument("--allow-insecure-http", action="store_true", help="Explicit lab-only HTTP transport override")
     parser.add_argument("--tls-cert", type=Path)
     parser.add_argument("--tls-key", type=Path)
@@ -46,7 +48,8 @@ def main(argv=None):
                                            token=os.environ.get("DOBOT_RESULTS_TOKEN"),
                                            allow_http=args.allow_insecure_http)
     gateway = Gateway(load_scene_config(args.scene), args.data_dir, args.mode, args.allow_live,
-                      upstream, results_delivery=results_delivery)
+                      upstream, results_delivery=results_delivery,
+                      publish_catalog_snapshot=args.publish_catalog_snapshot)
     server = None
     try:
         server = GatewayServer((args.host, args.port), gateway, token)

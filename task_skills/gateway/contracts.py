@@ -208,7 +208,9 @@ class Catalog:
             devices.append({
                 "device_id": device, "name": "Dobot Nova " + arm, "device_type": "embodied_executor",
                 "manufacturer": "Dobot", "capability_version": "1.0.0",
-                "capabilities": ["pick", "place", "atomic_actions"],
+                # Must cover every required_capabilities of supported_skill_ids, or the
+                # partner's snapshot validation rejects the device as incompatible.
+                "capabilities": ["pick", "place", "atomic_actions", "arm_motion", "gripper_actuation"],
                 "supported_skill_ids": sorted(EXECUTABLE_SKILLS | GUIDANCE_SKILLS),
                 "parameter_ranges": {}, "precision": {},
                 "completion_tolerances": {"tcp_position_mm": 1.0, "joint_angle_deg": 1.0},

@@ -42,7 +42,7 @@ python -B -m task_skills.gateway.operator --mode mock --data-dir ./gateway-data/
 |---|---|
 | `GET /health` | 模式、目录版本、执行占用及隔离状态 |
 | `GET /v1/catalog`（别名 `/v1/capabilities`） | 本机设备、技能、固定物体/位置绑定和执行子集 |
-| `POST /v1/execute-graph` | 请求体可以直接是 `RuntimeExecutionPackage` 本身，也可以包在 `{"graph": ...}` 里（**不需要任何幂等键**）；每个接收请求创建新执行；202 返回 `execution_id/status/graph_id/accepted_at` |
+| `POST /v1/execute-graph` | 对方规范 7.2 的直接下发入口。请求体可以直接是 `RuntimeExecutionPackage`，也可以是 `{"graph", "resume_from_node_id": null, "execution_id": null, "request_id"}`；带 `Idempotency-Key`（优先）或 `request_id` 时按规范 9.2 去重，不带时每次新建执行；202 返回 `execution_id/status/graph_id/accepted_at` |
 | `POST /v1/execute-graph/idempotent` | 幂等单次提交；使用 `Idempotency-Key` 或 `request_id` 去重 |
 | `POST /device-gateway/v1/execution-plans/validate` | `{"package": RuntimeExecutionPackage,"reserve_resources":true}`，返回绑定包的 `validation_token`；默认预留 60 秒 |
 | `POST /device-gateway/v1/executions` | `{"package": RuntimeExecutionPackage,"validation_token":"..."}`，正式执行 |
@@ -53,7 +53,9 @@ python -B -m task_skills.gateway.operator --mode mock --data-dir ./gateway-data/
 
 查询/事件/取消也支持 `/device-gateway/v1/executions/{id}` 前缀。JSON 请求必须 `Content-Type: application/json`，不支持 chunked，最大 2 MiB。`/v1/execute-graph/idempotent`、两阶段预检和正式提交必须带 `Idempotency-Key`，或请求体 `request_id`；两者都有时必须相同。同一请求键+同一原始包返回原会话，不重复动作；换包报 409。每个动作还必须带唯一 `skill_invocation.idempotency_key`，已使用的节点键不能交给另一个会话。
 
-`POST /v1/execute-graph` 每次接收有效请求都创建新执行，不需要 `Idempotency-Key`。它接受三种等价写法：请求体就是运行包本身（联调最省事，直接 POST 序列化好的图），或包在 `{"graph": ...}`、`{"package": ...}` 里（后两者只能有一个，混用返回 400）；不使用上游 `run_id` 拉图，也不接受预检 token、恢复或模式字段。若提供 `request_id`，必须是有效 ID，但不会用于去重。网关在包的深拷贝上生成唯一 dispatch key 和每个动作新的 `skill_invocation.idempotency_key`，同时保留 `package_id`、包内 `run_id` 和 `node_id`。因此自动重试或重复点击会创建另一份执行；依然受执行占用、预留、隔离、场景/物体状态及设备锁检查约束，不会取消当前任务或复位场景。需要网络重试保持幂等的自动化客户端应使用 `/v1/execute-graph/idempotent`；两阶段接口行为不变。
+**2026-11-12 起按对方《设备能力、原子技能库与动态执行图接口规范》修订：** `POST /v1/execute-graph` 接受规范 7.2 的信封，`resume_from_node_id`/`execution_id` 只能为 null（不支持续跑，非 null 返回 400）。带 `Idempotency-Key` 或 `request_id` 时（请求头优先，两者不同不报错），同一键重试返回原执行、不重复动作；新键会新建执行，节点键由服务端按请求键派生，所以同一编译图换新 `request_id` 再下发仍会执行。以下为不带键时的行为（原描述）。事件回传遇到 409 视为对方已按 `event_id` 去重收到。
+
+`POST /v1/execute-graph` 不带键时每次接收有效请求都创建新执行，不需要 `Idempotency-Key`。它接受三种等价写法：请求体就是运行包本身（联调最省事，直接 POST 序列化好的图），或包在 `{"graph": ...}`、`{"package": ...}` 里（后两者只能有一个，混用返回 400）；不使用上游 `run_id` 拉图，也不接受预检 token、恢复或模式字段。若提供 `request_id`，必须是有效 ID，但不会用于去重。网关在包的深拷贝上生成唯一 dispatch key 和每个动作新的 `skill_invocation.idempotency_key`，同时保留 `package_id`、包内 `run_id` 和 `node_id`。因此自动重试或重复点击会创建另一份执行；依然受执行占用、预留、隔离、场景/物体状态及设备锁检查约束，不会取消当前任务或复位场景。需要网络重试保持幂等的自动化客户端应使用 `/v1/execute-graph/idempotent`；两阶段接口行为不变。
 
 live 图执行完成后，网关为每个参与臂发送 `arm_finalizing` 和 `arm_finalized` 事件；归位失败或取消时发送 `arm_finalization_failed` 或 `arm_finalization_cancelled`。臂标识位于事件的 `payload.arm`，归位状态和反馈也在 payload 中。这些执行级事件不对应图节点，不包含 `node_id`。收尾归位在动之前先做一次只读探测：关节已在标定 home 容差内且 `RobotMode` 为 5 的臂记为 `skipped`、不发任何指令（图里已自行归位的包因此不会多动一次），只有确实不在 home 的臂才进入完整会话。live 网关把带令牌的 POST 本身视为现场授权，收尾归位不再依赖交互式确认；此前这条缺失会让一个全部成功的包在收尾报 `FINAL_HOME_FAILED`，并把 rig 置为隔离。
 
