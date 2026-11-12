@@ -35,7 +35,8 @@ def bare_package(body):
 
 class Gateway:
     def __init__(self, scene, directory, mode="mock", allow_live=False, upstream=None,
-                 adapter_factory=None, lease_path=None, reservation_seconds=60):
+                 adapter_factory=None, lease_path=None, reservation_seconds=60,
+                 results_delivery=None):
         if mode not in {"mock", "live"}:
             raise ValueError("Mode must be mock or live")
         if mode == "live" and (not allow_live or os.name != "nt"):
@@ -52,11 +53,15 @@ class Gateway:
         self.active = None
         self.cancel_event = None
         self.worker = None
+        self._execution_workers = []
         self.reservation_token = None
         self.reservation_until = 0
         self.reservation_seconds = reservation_seconds
         self.lease_path, self.lease = lease_path, None
         self.upstream, self.adapter_factory = upstream, adapter_factory
+        self.results_delivery = results_delivery
+        self._result_capture_lock = threading.Lock()
+        self._result_capture_errors = {}
         self.closed = False
         self.store.recover(mode == "live")
         self.delivery = DeliveryWorker(self.store, upstream)
@@ -64,6 +69,61 @@ class Gateway:
         for device in self.catalog.snapshot()["devices"]:
             self.store.device_event(device["device_id"], "idle" if mode == "mock" else "offline", mode=mode)
         self.delivery.start()
+        if self.results_delivery is not None:
+            self._recover_result_captures()
+            self.results_delivery.start()
+
+    def _capture_result(self, execution_id):
+        """Copy committed execution evidence to the independent result queue."""
+        with self._result_capture_lock:
+            self._capture_result_locked(execution_id)
+
+    def _capture_result_locked(self, execution_id):
+        record = self.store.get(execution_id)
+        if record["status"] not in TERMINAL:
+            return
+        events, after = [], 0
+        while True:
+            page = self.store.events(execution_id, after=after, limit=1000)
+            if not page:
+                break
+            events.extend(page)
+            after = page[-1]["sequence"]
+        terminal = next((e for e in reversed(events)
+                         if e["event_type"] == "execution_" + record["status"]), None)
+        result = dict(terminal["payload"]) if terminal else {}
+        result["status"] = record["status"]
+        if record["error"] is not None:
+            result["error"] = record["error"]
+        directory = self.directory / "executions" / execution_id
+        self.results_delivery.capture(execution_id, record["package"], result,
+                                      events, directory, self.mode)
+        with self.store.transaction() as db:
+            db.execute("DELETE FROM metadata WHERE name=?", ("results-capture:" + execution_id,))
+        self._result_capture_errors.pop(execution_id, None)
+
+    def _pending_result_captures(self):
+        with self.store.lock:
+            rows = self.store.db.execute(
+                "SELECT name FROM metadata WHERE name LIKE 'results-capture:%'").fetchall()
+        return sorted(set(row[0].split(":", 1)[1] for row in rows)
+                      | set(self._result_capture_errors))
+
+    def _recover_result_captures(self):
+        # Only executions explicitly enrolled in this channel are recovered.
+        # Enabling it must not silently publish historical experiments.
+        for execution_id in self._pending_result_captures():
+            try:
+                self._capture_result(execution_id)
+            except Exception as error:
+                self._result_capture_errors[execution_id] = type(error).__name__
+
+    def result_delivery_status(self):
+        if self.results_delivery is None:
+            return {"configured": False}
+        return {"configured": True, "capture_pending": self._pending_result_captures(),
+                "capture_errors": dict(self._result_capture_errors),
+                "delivery": self.results_delivery.status()}
 
     def _plan(self, body):
         if not isinstance(body, dict):
@@ -228,6 +288,8 @@ class Gateway:
             self.active = record["id"]
             self.cancel_event = threading.Event()
             self.worker = threading.Thread(target=self._execute, args=(record["id"], plan, self.cancel_event), name="dobot-execution")
+            self._execution_workers = [worker for worker in self._execution_workers if worker.is_alive()]
+            self._execution_workers.append(self.worker)
             self.worker.start()
             return self._response(record)
 
@@ -270,6 +332,13 @@ class Gateway:
                 if cancel.is_set() and kwargs.get("status") in {"running", "finalizing"}:
                     kwargs["status"] = "cancelling"
                 self.store.event(execution_id, event_type, **kwargs)
+        if self.results_delivery is not None:
+            try:
+                with self.store.transaction() as db:
+                    db.execute("INSERT OR REPLACE INTO metadata VALUES(?,?)",
+                               ("results-capture:" + execution_id, "pending"))
+            except Exception as error:
+                self._result_capture_errors[execution_id] = type(error).__name__
         try:
             if self.adapter_factory:
                 adapter = self.adapter_factory(cancel)
@@ -315,6 +384,13 @@ class Gateway:
                     state = "fault" if result["status"] == "interrupted" else "idle" if self.mode == "mock" else "offline"
                     self.store.device_event(device["device_id"], state, mode=self.mode)
                 self.active = None
+            if self.results_delivery is not None:
+                try:
+                    self._capture_result(execution_id)
+                except Exception as error:
+                    # Upload/capture failure must not rewrite the robot outcome.
+                    # The registry enrollment permits a later recovery attempt.
+                    self._result_capture_errors[execution_id] = type(error).__name__
 
     def status(self, execution_id):
         with self.lock:
@@ -336,6 +412,8 @@ class Gateway:
             return self.status(execution_id)
 
     def maintain(self):
+        if self.results_delivery is not None:
+            self._recover_result_captures()
         with self.lock:
             if not self.active and self.reservation_token and time.time() >= self.reservation_until:
                 self.reservation_token = None
@@ -346,12 +424,15 @@ class Gateway:
             self.closed = True
             if self.cancel_event and self.active:
                 self.cancel_event.set()
-        if self.worker:
-            self.worker.join(timeout=15)
-            if self.worker.is_alive():
+        shutdown_deadline = time.monotonic() + 15
+        for worker in self._execution_workers:
+            worker.join(timeout=max(0, shutdown_deadline - time.monotonic()))
+            if worker.is_alive():
                 self.store.quarantine("Worker shutdown was not confirmed")
                 raise RuntimeError("Execution worker has not stopped; retain ownership and registry")
         self.delivery.close()
+        if self.results_delivery is not None:
+            self.results_delivery.close()
         if not self.store.quarantine_reason():
             self._release_lease()
         self.store.close()

@@ -130,6 +130,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return 200, gateway.catalog.snapshot()
         if method == "GET" and path == "/v1/delivery-status":
             return 200, {**gateway.store.delivery_status(), "upstream_configured": gateway.upstream is not None}
+        if method == "GET" and path == "/v1/results-delivery-status":
+            return 200, gateway.result_delivery_status()
         key = self.headers.get("Idempotency-Key")
         if method == "POST" and path == "/device-gateway/v1/execution-plans/validate":
             return 200, gateway.preflight(body, key)

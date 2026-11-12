@@ -20,6 +20,7 @@ def main(argv=None):
     parser.add_argument("--scene", type=Path, default=Path(__file__).with_name("scene_config.json"))
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--compiler-url")
+    parser.add_argument("--results-url", help="Independent provisional 3.3 receiver base URL")
     parser.add_argument("--allow-insecure-http", action="store_true", help="Explicit lab-only HTTP transport override")
     parser.add_argument("--tls-cert", type=Path)
     parser.add_argument("--tls-key", type=Path)
@@ -38,7 +39,14 @@ def main(argv=None):
         parser.error("Supply both --tls-cert and --tls-key")
     upstream = Upstream(args.compiler_url, os.environ.get("DOBOT_COMPILER_TOKEN"),
                         allow_http=args.allow_insecure_http) if args.compiler_url else None
-    gateway = Gateway(load_scene_config(args.scene), args.data_dir, args.mode, args.allow_live, upstream)
+    results_delivery = None
+    if args.results_url:
+        from .results import ResultsDelivery
+        results_delivery = ResultsDelivery(args.data_dir / "results-outbox", args.results_url,
+                                           token=os.environ.get("DOBOT_RESULTS_TOKEN"),
+                                           allow_http=args.allow_insecure_http)
+    gateway = Gateway(load_scene_config(args.scene), args.data_dir, args.mode, args.allow_live,
+                      upstream, results_delivery=results_delivery)
     server = None
     try:
         server = GatewayServer((args.host, args.port), gateway, token)

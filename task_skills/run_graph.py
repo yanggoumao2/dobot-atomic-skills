@@ -2,6 +2,7 @@
 
 import threading
 import time
+import traceback
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
@@ -152,7 +153,9 @@ def run_graph(plan, adapter, scene, directory, cancel, emit, live=False):
                         request_stop()
                         node_status = "interrupted" if is_cancel and not stop_result.get("confirmed") else "cancelled" if is_cancel else "failed"
                         emit("action_" + node_status, node_id=node_id, node_status=node_status,
-                             error={"code": code, "retryable": False}, payload={"exception_type": type(error).__name__})
+                             error={"code": code, "retryable": False},
+                             payload={"exception_type": type(error).__name__,
+                                      "message": str(error), "traceback": traceback.format_exc()})
                     else:
                         completed.add(node_id)
                         emit("action_completed" if nodes[node_id]["node_type"] == "action" else "wait_completed",
@@ -287,4 +290,5 @@ def run_graph(plan, adapter, scene, directory, cancel, emit, live=False):
         return {"status": "cancelled" if interrupted else "failed",
                 "error": {"code": "EXECUTION_CANCELLED" if interrupted else "MOTION_TIMEOUT" if isinstance(error, TimeoutError) else "EXECUTION_FAILED",
                           "retryable": False, "message": str(error)},
-                "stop": stop_result, "exception_type": type(error).__name__}
+                "stop": stop_result, "exception_type": type(error).__name__,
+                "traceback": traceback.format_exc()}
