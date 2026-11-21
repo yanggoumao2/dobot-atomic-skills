@@ -1,0 +1,349 @@
+<?xml version="1.0"?>
+<robot name="dobot_nova2_dual">
+  <!--
+    Kinematic provenance: adapted from the official Dobot-Arm
+    DOBOT_6Axis_ROS2_V4 cra_description/urdf/nova2_robot.xacro at
+    https://github.com/Dobot-Arm/DOBOT_6Axis_ROS2_V4/blob/7807ef8fb31e8f86a76cd474a4a9cddffef6eca9/cra_description/urdf/nova2_robot.xacro
+    (MIT License, Copyright (c) 2026 Dobot; full notice below). Only the Nova2
+    base-to-Link6 joint origins, RPY values, and axes are adapted here. The
+    upstream world/dummy links and 30 mm Gazebo floor offset are omitted; the
+    synthetic shared fixture is this model's root.
+
+    Nova2 range and speed limits follow the Dobot Nova Series User Guide V1.9,
+    2024-12-30, Appendix A:
+    https://a.storyblok.com/f/298593/x/ac6b5abd4c/dobot-nova-series-user-guide_v1-9_20241231_en.pdf
+    (J1 +/-360 deg, J2 +/-180 deg, J3 +/-156 deg, J4-J6 +/-360 deg; 135 deg/s).
+    This differs from the upstream URDF's J3 +/-2.79 rad and its generic
+    velocity=100; the guide values are used for the model limits. The upstream
+    URDF effort=300 value is retained because URDF requires an effort limit;
+    it is not a verified Nova2 torque rating.
+
+    Everything marked synthetic is a visualization aid only: the shared
+    fixture and +/-0.30 m arm spacing, cylindrical link visuals, flange-to-hand
+    rendering, and fixed 80 mm jaw opening. No collision or inertial geometry
+    is provided because manufacturer meshes and validated mass properties are
+    outside this two-file model.
+
+    MIT License
+    Copyright (c) 2026 Dobot
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+  -->
+
+  <material name="fixture_gray">
+    <color rgba="0.30 0.33 0.37 1"/>
+  </material>
+  <material name="nova_blue">
+    <color rgba="0.79 0.82 0.93 1"/>
+  </material>
+  <material name="gripper_dark">
+    <color rgba="0.20 0.22 0.25 1"/>
+  </material>
+
+  <!-- Synthetic shared desktop fixture: 0.85 x 0.80 x 0.05 m. -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 -0.025" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.85 0.80 0.05"/>
+      </geometry>
+      <material name="fixture_gray"/>
+    </visual>
+  </link>
+
+  <!-- The following link visuals are primitive renderings, not Dobot CAD. -->
+  <link name="left_base_link">
+    <visual>
+      <origin xyz="0 0 0.1117" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.075" length="0.2234"/>
+      </geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="left_arm_mount_joint" type="fixed">
+    <origin xyz="0 0.30 0" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="left_base_link"/>
+  </joint>
+
+  <link name="right_base_link">
+    <visual>
+      <origin xyz="0 0 0.1117" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.075" length="0.2234"/>
+      </geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="right_arm_mount_joint" type="fixed">
+    <origin xyz="0 -0.30 0" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="right_base_link"/>
+  </joint>
+
+  <!-- Nova2 arm kinematics copied from the pinned official Xacro above. -->
+  <link name="left_Link1">
+    <visual>
+      <geometry><cylinder radius="0.068" length="0.10"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="left_joint1" type="revolute">
+    <origin xyz="0 0 0.2234" rpy="0 0 0"/>
+    <parent link="left_base_link"/>
+    <child link="left_Link1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307180" upper="6.283185307180" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <link name="left_Link2">
+    <visual>
+      <origin xyz="-0.14 0 0" rpy="0 -1.5708 0"/>
+      <geometry><cylinder radius="0.035" length="0.28"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="left_joint2" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5708 1.5708 0"/>
+    <parent link="left_Link1"/>
+    <child link="left_Link2"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.141592653590" upper="3.141592653590" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <link name="left_Link3">
+    <visual>
+      <origin xyz="-0.112505 0 0.05875" rpy="0 -1.0895 0"/>
+      <geometry><cylinder radius="0.032" length="0.2538"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="left_joint3" type="revolute">
+    <origin xyz="-0.28 0 0" rpy="0 0 0"/>
+    <parent link="left_Link2"/>
+    <child link="left_Link3"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.722713633111" upper="2.722713633111" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <link name="left_Link4">
+    <visual>
+      <origin xyz="0 -0.06 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.024" length="0.12"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="left_joint4" type="revolute">
+    <origin xyz="-0.22501 0 0.1175" rpy="0 0 -1.5708"/>
+    <parent link="left_Link3"/>
+    <child link="left_Link4"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307180" upper="6.283185307180" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <link name="left_Link5">
+    <visual>
+      <origin xyz="0 0.044002 0" rpy="-1.5708 0 0"/>
+      <geometry><cylinder radius="0.020" length="0.088004"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="left_joint5" type="revolute">
+    <origin xyz="0 -0.12 0" rpy="1.5708 0 0"/>
+    <parent link="left_Link4"/>
+    <child link="left_Link5"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307180" upper="6.283185307180" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <link name="left_Link6">
+    <visual>
+      <geometry><sphere radius="0.035"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="left_joint6" type="revolute">
+    <origin xyz="0 0.088004 0" rpy="-1.5708 0 0"/>
+    <parent link="left_Link5"/>
+    <child link="left_Link6"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307180" upper="6.283185307180" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <link name="right_Link1">
+    <visual>
+      <geometry><cylinder radius="0.068" length="0.10"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="right_joint1" type="revolute">
+    <origin xyz="0 0 0.2234" rpy="0 0 0"/>
+    <parent link="right_base_link"/>
+    <child link="right_Link1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307180" upper="6.283185307180" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <link name="right_Link2">
+    <visual>
+      <origin xyz="-0.14 0 0" rpy="0 -1.5708 0"/>
+      <geometry><cylinder radius="0.035" length="0.28"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="right_joint2" type="revolute">
+    <origin xyz="0 0 0" rpy="1.5708 1.5708 0"/>
+    <parent link="right_Link1"/>
+    <child link="right_Link2"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.141592653590" upper="3.141592653590" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <link name="right_Link3">
+    <visual>
+      <origin xyz="-0.112505 0 0.05875" rpy="0 -1.0895 0"/>
+      <geometry><cylinder radius="0.032" length="0.2538"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="right_joint3" type="revolute">
+    <origin xyz="-0.28 0 0" rpy="0 0 0"/>
+    <parent link="right_Link2"/>
+    <child link="right_Link3"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.722713633111" upper="2.722713633111" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <link name="right_Link4">
+    <visual>
+      <origin xyz="0 -0.06 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.024" length="0.12"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="right_joint4" type="revolute">
+    <origin xyz="-0.22501 0 0.1175" rpy="0 0 -1.5708"/>
+    <parent link="right_Link3"/>
+    <child link="right_Link4"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307180" upper="6.283185307180" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <link name="right_Link5">
+    <visual>
+      <origin xyz="0 0.044002 0" rpy="-1.5708 0 0"/>
+      <geometry><cylinder radius="0.020" length="0.088004"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="right_joint5" type="revolute">
+    <origin xyz="0 -0.12 0" rpy="1.5708 0 0"/>
+    <parent link="right_Link4"/>
+    <child link="right_Link5"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307180" upper="6.283185307180" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <link name="right_Link6">
+    <visual>
+      <geometry><sphere radius="0.035"/></geometry>
+      <material name="nova_blue"/>
+    </visual>
+  </link>
+  <joint name="right_joint6" type="revolute">
+    <origin xyz="0 0.088004 0" rpy="-1.5708 0 0"/>
+    <parent link="right_Link5"/>
+    <child link="right_Link6"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283185307180" upper="6.283185307180" effort="300" velocity="2.356194490192"/>
+  </joint>
+
+  <!-- Synthetic fixed-open 80 mm parallel jaws; not a Dobot-supplied gripper. -->
+  <link name="left_gripper_palm">
+    <visual>
+      <origin xyz="0 0 0.018" rpy="0 0 0"/>
+      <geometry><box size="0.11 0.10 0.036"/></geometry>
+      <material name="gripper_dark"/>
+    </visual>
+  </link>
+  <joint name="left_gripper_mount_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="left_Link6"/>
+    <child link="left_gripper_palm"/>
+  </joint>
+  <link name="left_gripper_left_finger">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><box size="0.02 0.012 0.08"/></geometry>
+      <material name="gripper_dark"/>
+    </visual>
+  </link>
+  <joint name="left_gripper_left_finger_mount_joint" type="fixed">
+    <origin xyz="0 0.046 0.036" rpy="0 0 0"/>
+    <parent link="left_gripper_palm"/>
+    <child link="left_gripper_left_finger"/>
+  </joint>
+  <link name="left_gripper_right_finger">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><box size="0.02 0.012 0.08"/></geometry>
+      <material name="gripper_dark"/>
+    </visual>
+  </link>
+  <joint name="left_gripper_right_finger_mount_joint" type="fixed">
+    <origin xyz="0 -0.046 0.036" rpy="0 0 0"/>
+    <parent link="left_gripper_palm"/>
+    <child link="left_gripper_right_finger"/>
+  </joint>
+
+  <link name="right_gripper_palm">
+    <visual>
+      <origin xyz="0 0 0.018" rpy="0 0 0"/>
+      <geometry><box size="0.11 0.10 0.036"/></geometry>
+      <material name="gripper_dark"/>
+    </visual>
+  </link>
+  <joint name="right_gripper_mount_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="right_Link6"/>
+    <child link="right_gripper_palm"/>
+  </joint>
+  <link name="right_gripper_left_finger">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><box size="0.02 0.012 0.08"/></geometry>
+      <material name="gripper_dark"/>
+    </visual>
+  </link>
+  <joint name="right_gripper_left_finger_mount_joint" type="fixed">
+    <origin xyz="0 0.046 0.036" rpy="0 0 0"/>
+    <parent link="right_gripper_palm"/>
+    <child link="right_gripper_left_finger"/>
+  </joint>
+  <link name="right_gripper_right_finger">
+    <visual>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <geometry><box size="0.02 0.012 0.08"/></geometry>
+      <material name="gripper_dark"/>
+    </visual>
+  </link>
+  <joint name="right_gripper_right_finger_mount_joint" type="fixed">
+    <origin xyz="0 -0.046 0.036" rpy="0 0 0"/>
+    <parent link="right_gripper_palm"/>
+    <child link="right_gripper_right_finger"/>
+  </joint>
+</robot>

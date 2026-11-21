@@ -1,0 +1,32 @@
+manifestVersion: 1
+name: dobot-nova2-sim
+
+catalog:
+  name: dobot.robot.nova2.dual_arm_sim
+  version: 0.1.0
+  description: Offline Dobot Nova2 dual-arm and parallel-gripper deployment.
+  license: MIT
+  tags: [robot, simulation, manipulator, dobot]
+  maintainers: [yanggoumao2]
+
+env:
+  ROBONIX_PROVIDER_BIND_HOST: "127.0.0.1"
+  ROBONIX_ADVERTISE_HOST: "127.0.0.1"
+
+system:
+  atlas: { listen: "127.0.0.1:50051" }
+  soma: { listen: "127.0.0.1:50091", robot_yaml: ./soma.yaml }
+
+primitive:
+  - name: left_arm
+    path: ./primitives/nova2_arm
+    config: { side: left }
+  - name: right_arm
+    path: ./primitives/nova2_arm
+    config: { side: right }
+  - name: left_gripper
+    path: ./primitives/nova2_gripper
+    config: { side: left }
+  - name: right_gripper
+    path: ./primitives/nova2_gripper
+    config: { side: right }

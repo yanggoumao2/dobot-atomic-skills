@@ -1,0 +1,23 @@
+manifestVersion: 1
+
+package:
+  name: org.dobot_atomic_skills.nova2_arm
+  version: 0.1.0
+  vendor: dobot-atomic-skills
+  description: Hardware-free Nova2 arm mock for named joint command and state streams.
+  tags: [primitive, arm, nova2, mock]
+  maintainers:
+    - Dobot Atomic Skills
+  license: MIT
+
+build: bash scripts/build.sh
+start: bash scripts/start.sh
+
+# The shared Robonix lifecycle Driver is selected automatically.
+capabilities:
+  - name: robonix/primitive/arm/joint_command
+    transport: grpc
+  - name: robonix/primitive/arm/joint_states
+    transport: grpc
+
+depends: []

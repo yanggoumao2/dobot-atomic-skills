@@ -1,0 +1,31 @@
+# Native Linux Nova2 mock gripper primitive.
+# Configure the package as two provider instances when both sides are needed:
+#   left_gripper  -> config.side: left
+#   right_gripper -> config.side: right
+# The mock only reports a synthetic 0.08 m jaw stroke; it has no contact model.
+
+manifestVersion: 1
+
+package:
+  name: org.dobot_atomic_skills.nova2_gripper
+  version: 0.1.0
+  vendor: dobot-atomic-skills
+  description: Native Linux Nova2 gripper mock with synthetic jaw width only.
+  license: MIT
+
+build: bash scripts/build.sh
+start: bash scripts/start.sh
+
+capabilities:
+  - name: robonix/primitive/gripper/info
+    transport: mcp
+  - name: robonix/primitive/gripper/open
+    transport: mcp
+  - name: robonix/primitive/gripper/move
+    transport: mcp
+  - name: robonix/primitive/gripper/stop
+    transport: mcp
+  - name: robonix/primitive/gripper/grip
+    transport: mcp
+  - name: robonix/primitive/gripper/state
+    transport: grpc

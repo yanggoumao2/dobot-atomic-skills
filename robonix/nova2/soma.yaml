@@ -1,0 +1,109 @@
+# One simulated fixed dual-arm body. Only the Dobot Nova2 kinematic chain is
+# manufacturer-derived; the shared desktop fixture and generic gripper visuals
+# in urdf/nova2_dual.urdf are synthetic and have no collision geometry.
+#
+# Arm transforms source: Dobot-Arm/DOBOT_6Axis_ROS2_V4, commit
+# 7807ef8fb31e8f86a76cd474a4a9cddffef6eca9, cra_description/urdf/nova2_robot.xacro
+# (MIT, Copyright (c) 2026 Dobot). Limits and 625 mm working radius source:
+# Dobot Nova Series User Guide V1.9 (2024-12-30), Appendix A. The guide specifies
+# J3 +/-156 degrees and 135 degrees/s; the source URDF instead has +/-2.79 rad
+# and generic 100 rad/s values, so the physical guide limits are used.
+#
+# Fixture spacing is synthetic: left arm at +Y, right arm at -Y, 0.60 m apart.
+# The fixed-jaw drawings show an illustrative 0.08 m opening; they do not animate
+# from the standalone gripper state contract. Soma's joint-state gripper
+# calibration is intentionally omitted because these providers do not expose an
+# arm JointState contract for gripper position.
+
+urdf:
+  path: ./urdf/nova2_dual.urdf
+  root_link: base_link
+  model_name: dobot_nova2_dual
+
+robot:
+  id: dobot_nova2_dual_sim
+  display_name: "Dobot Nova2 Dual Arm Simulation"
+  family: fixed_dual_arm_desktop
+  root_part: base
+  exports: []
+  components:
+    - id: base
+      type: fixed_base
+      urdf_link: base_link
+      exports: []
+      components:
+        - id: left_arm
+          type: manipulator
+          urdf_link: left_base_link
+          urdf_joint: left_arm_mount_joint
+          exports:
+            - provider_id: left_arm
+              capabilities:
+                - path: robonix/primitive/arm/joint_states
+                  description: "Read the six left Nova2 joint positions in radians; velocity and effort fields are omitted."
+                - path: robonix/primitive/arm/joint_command
+                  description: "Command the six named left Nova2 joint positions in radians; velocity and effort fields are omitted."
+          components:
+            - id: left_gripper
+              type: parallel_jaw_gripper
+              urdf_link: left_gripper_palm
+              urdf_joint: left_gripper_mount_joint
+              exports:
+                - provider_id: left_gripper
+                  capabilities:
+                    - path: robonix/primitive/gripper/info
+                      description: "Read left gripper range and settings."
+                    - path: robonix/primitive/gripper/move
+                      description: "Set the left gripper opening width."
+                    - path: robonix/primitive/gripper/open
+                      description: "Open the left gripper to its configured endpoint."
+                    - path: robonix/primitive/gripper/grip
+                      description: "Simulate closing the left gripper without modeling object contact or grasping."
+                    - path: robonix/primitive/gripper/stop
+                      description: "Stop left gripper jaw motion."
+                    - path: robonix/primitive/gripper/state
+                      description: "Read left gripper opening and simulated jaw-motion state; object contact is not modeled."
+
+        - id: right_arm
+          type: manipulator
+          urdf_link: right_base_link
+          urdf_joint: right_arm_mount_joint
+          exports:
+            - provider_id: right_arm
+              capabilities:
+                - path: robonix/primitive/arm/joint_states
+                  description: "Read the six right Nova2 joint positions in radians; velocity and effort fields are omitted."
+                - path: robonix/primitive/arm/joint_command
+                  description: "Command the six named right Nova2 joint positions in radians; velocity and effort fields are omitted."
+          components:
+            - id: right_gripper
+              type: parallel_jaw_gripper
+              urdf_link: right_gripper_palm
+              urdf_joint: right_gripper_mount_joint
+              exports:
+                - provider_id: right_gripper
+                  capabilities:
+                    - path: robonix/primitive/gripper/info
+                      description: "Read right gripper range and settings."
+                    - path: robonix/primitive/gripper/move
+                      description: "Set the right gripper opening width."
+                    - path: robonix/primitive/gripper/open
+                      description: "Open the right gripper to its configured endpoint."
+                    - path: robonix/primitive/gripper/grip
+                      description: "Simulate closing the right gripper without modeling object contact or grasping."
+                    - path: robonix/primitive/gripper/stop
+                      description: "Stop right gripper jaw motion."
+                    - path: robonix/primitive/gripper/state
+                      description: "Read right gripper opening and simulated jaw-motion state; object contact is not modeled."
+  description:
+    summary: "Two Dobot Nova2 arms on a synthetic shared desktop fixture."
+    can_do:
+      - "Describe the two six-axis Nova2 kinematic chains."
+      - "Expose independent arm and gripper providers."
+    cannot_do:
+      - "Represent manufacturer-accurate link meshes or collision clearances."
+      - "Model object contact or successful grasp outcomes."
+      - "Animate the fixed-open URDF jaw visuals from the standalone gripper state contract."
+    notes:
+      - "Use left_joint1..left_joint6 and right_joint1..right_joint6 in arm JointState messages."
+      - "The arm links use the official Nova2 kinematic origins; fixture placement and gripper geometry are synthetic."
