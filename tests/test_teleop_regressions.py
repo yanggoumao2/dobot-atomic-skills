@@ -4,6 +4,9 @@ import threading
 import time
 import types
 import unittest
+import configparser
+from contextlib import ExitStack
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -38,10 +41,13 @@ from dobot_control.robots.robot import BimanualRobot
 from dobot_control.robots.robot_node import ZMQClientRobot
 from dobot_control.env import RobotEnv
 from dobot_control.async_writer import BoundedAsyncWriter
+from dobot_control.dynamixel.driver import DynamixelDriver
+from dobot_control.agents.agent import BimanualAgent
 from dobot_control.teleop_safety import (
     MasterRunawayGuard,
     check_pose_protection,
     consume_servo_warmup,
+    is_within_workspace,
 )
 from scripts.manipulate_utils import (
     apply_same_side_gripper_targets,
@@ -385,10 +391,10 @@ class MasterRunawayGuardTests(unittest.TestCase):
 
     def test_pose_protection_uses_crossed_nova_flags(self):
         positions = {
-            "left_left": np.array([-0.5, -0.3, 0.1]),
-            "left_right": np.array([-0.5, -0.3, 0.1]),
-            "right_left": np.array([0.0, -0.3, 0.1]),
-            "right_right": np.array([0.0, -0.3, 0.1]),
+            "left_left": np.array([-0.7, -0.4, 0.1]),
+            "left_right": np.array([-0.7, -0.4, 0.1]),
+            "right_left": np.array([0.0, -0.4, 0.1]),
+            "right_right": np.array([0.0, -0.4, 0.1]),
         }
         velocities = {key: np.zeros(3) for key in positions}
 
@@ -426,6 +432,244 @@ class MasterRunawayGuardTests(unittest.TestCase):
         result = guard.check(sample, arm_flags=[1, 0], timestamp=0.1)
 
         self.assertFalse(result.tripped)
+
+
+class WorkspaceAndWristCorrectionTests(unittest.TestCase):
+    def test_translation_uses_ip_identity_and_restores_y(self):
+        for side, low, high in (("left", -300, 450), ("right", -400, 300)):
+            for x in (low, high):
+                for y in (-750, -160):
+                    self.assertTrue(is_within_workspace([x,y,41], side))
+            for p in ([low-.01,-400,100], [high+.01,-400,100],
+                      [0,-750.01,100], [0,-159.99,100], [0,-400,40]):
+                self.assertFalse(is_within_workspace(p, side))
+        self.assertTrue(is_within_workspace([400,-200,100], "left"))
+        self.assertFalse(is_within_workspace([-400,-200,100], "left"))
+        self.assertTrue(is_within_workspace([-350,-200,100], "right"))
+        self.assertFalse(is_within_workspace([400,-200,100], "right"))
+
+    def test_alignment_and_runtime_share_new_bounds(self):
+        from experiments import run_control as control
+        for side, flags, x in (("left", [1,0], 451), ("right", [0,1], -401)):
+            positions = {key: np.array([0.,-.2,.1]) for key in
+                         ("left_left","left_right","right_left","right_right")}
+            velocity = {key: np.zeros(3) for key in positions}
+            for outside in (False, True):
+                positions[f"{side}_right"][0] = x/1000 if outside else 0
+                with patch.object(control, "calculate_vel_pos", return_value=(positions,velocity)), \
+                        patch.object(control, "check_joint_safety", return_value=False):
+                    accepted, _ = control.validate_absolute_alignment(np.zeros(14), np.zeros(14), "Nova 2", flags)
+                self.assertEqual(accepted, not outside)
+                self.assertEqual(check_pose_protection(positions,velocity,flags), outside)
+
+    def test_recorded_reference_maps_all_six_joints_to_configured_reference(self):
+        from scripts.manipulate_utils import load_ini_data_hands
+        _, hands = load_ini_data_hands()
+        hand = hands["HAND_RIGHT"]
+        # Original 2026-10-27 10:10:29 reference acquisition (no new hardware read).
+        raw = np.array([2.334718759161946,3.8702335278354725,1.5953400194010667,
+                        3.8886412972901008,5.691068723055729,1.552388557340269])
+        mapped = (raw-np.array(hand.joint_offsets))*np.array(hand.joint_signs)
+        np.testing.assert_allclose(mapped, hand.start_joints, atol=1e-8)
+        action = master_to_nova_action(np.r_[np.zeros(7), mapped, 1.])
+        self.assertAlmostEqual(action[5], -1.57, places=7)
+        # Correcting zero offset must preserve sign and incremental motion.
+        changed = (raw+0.01-np.array(hand.joint_offsets))*np.array(hand.joint_signs)
+        np.testing.assert_allclose(changed-mapped, .01*np.array(hand.joint_signs))
+
+    def test_logged_half_turn_is_removed_without_wrapping_targets(self):
+        from dobot_control.absolute_teleop import AbsoluteTeleopPlanner
+        from scripts.manipulate_utils import load_ini_data_hands
+        _, hands = load_ini_data_hands()
+        correction = hands["HAND_RIGHT"].joint_offsets[5] - (-.01761144)
+        current = np.zeros(14); current[5] = -1.570796
+        target = current.copy(); target[5] = 1.435010 - correction
+        self.assertLess(abs(np.rad2deg(target[5]-current[5])), 8)
+        planner = AbsoluteTeleopPlanner()
+        previous = planner.enable([1,0], current, current)
+        for _ in range(100):
+            command, _ = planner.step(target, previous, previous, .02)
+            speed = planner.follow_speed if planner.aligned[0] else planner.align_speed
+            self.assertLessEqual(abs(command[5]-previous[5]), speed*.02+1e-9)
+            self.assertLess(command[5], 0)
+            previous = command
+        self.assertAlmostEqual(previous[5], target[5])
+
+
+class MasterSerialRecoveryTests(unittest.TestCase):
+    def driver(self):
+        # No constructor: all serial and motor boundaries are synthetic.
+        driver = DynamixelDriver.__new__(DynamixelDriver)
+        driver._ids = [11, 12]
+        driver._lock = threading.Lock()
+        driver._state_lock = threading.Lock()
+        driver._stop_thread = threading.Event()
+        driver._reader_error = None
+        driver._reading_thread = Mock()
+        driver._reading_thread.is_alive.return_value = True
+        driver._joint_angles = np.array([10, 20])
+        driver._joints_updated_at = time.monotonic() - .3
+        driver._joint_keys = [1, 1, 0]
+        driver._keys_updated_at = time.monotonic() - .3
+        driver.using_sensor = False
+        driver._groupSyncRead = Mock()
+        driver._groupSyncRead.txRxPacket.return_value = 0
+        driver._groupSyncRead.isAvailable.return_value = True
+        driver._groupSyncRead.getData.return_value = 0xFFFFFFFF
+        port = Mock()
+        port.getPortName.return_value = "COM5"
+        port.buffer = bytearray(b"stale SDK tail")
+        port.reply = bytes([0x11, 0xEE])
+        port.ser.reset_input_buffer.side_effect = lambda: port.buffer.clear()
+        def write(packet):
+            self.assertEqual(port.buffer, b"")
+            port.buffer.extend(port.reply)
+            return len(packet)
+        def read(length):
+            data = bytes(port.buffer[:length])
+            del port.buffer[:length]
+            return data
+        port.writePort.side_effect = write
+        port.readPort.side_effect = read
+        port.isPacketTimeout.return_value = True
+        driver._portHandler = port
+        return driver
+
+    def test_corrupt_and_timeout_joint_reads_do_not_starve_button_polling(self):
+        driver = self.driver()
+        old_joint_time = driver._joints_updated_at
+        for result in (-3002, -3001):
+            driver._groupSyncRead.txRxPacket.return_value = result
+            driver._read_state_once()
+            np.testing.assert_array_equal(driver.get_keys(), [1,1,0])
+            self.assertEqual(driver._joints_updated_at, old_joint_time)
+            with self.assertRaisesRegex(RuntimeError, "joint state stale.*250 ms"):
+                driver.get_joints()
+        self.assertEqual(driver._portHandler.writePort.call_count, 2)
+        driver._groupSyncRead.txRxPacket.return_value = 0
+        driver._read_state_once()
+        np.testing.assert_allclose(driver.get_joints(), [-np.pi/2048]*2)
+
+    def test_residual_joint_and_button_bytes_are_discarded_at_protocol_boundaries(self):
+        driver = self.driver()
+        def sync_read():
+            self.assertEqual(driver._portHandler.buffer, b"")
+            driver._portHandler.buffer.extend(b"incomplete status frame")
+            return -3002
+        driver._groupSyncRead.txRxPacket.side_effect = sync_read
+        driver._read_state_once()
+        self.assertEqual(driver._portHandler.ser.reset_input_buffer.call_count, 2)
+        np.testing.assert_array_equal(driver.get_keys(), [1,1,0])
+
+    def test_incomplete_joint_set_does_not_refresh_angles(self):
+        driver = self.driver()
+        driver._groupSyncRead.isAvailable.side_effect = [True, False]
+        driver._read_state_once()
+        with self.assertRaisesRegex(RuntimeError, "joint state stale"):
+            driver.get_joints()
+        np.testing.assert_array_equal(driver.get_keys(), [1,1,0])
+
+    def test_short_button_reply_keeps_original_timestamp_and_stops_at_250ms(self):
+        driver = self.driver()
+        old_time = driver._keys_updated_at
+        driver._portHandler.reply = bytes([0x11])
+        driver._read_state_once()
+        self.assertEqual(driver._keys_updated_at, old_time)
+        with self.assertRaisesRegex(RuntimeError, "button state stale.*250 ms"):
+            driver.get_keys()
+        # The next complete response recovers independently of stale bytes.
+        driver._portHandler.reply = bytes([0x11, 0xEE])
+        driver._read_state_once()
+        np.testing.assert_array_equal(driver.get_keys(), [1,1,0])
+
+    def test_complementary_but_invalid_button_nibbles_are_rejected(self):
+        driver = self.driver()
+        driver._portHandler.reply = bytes([0xF0, 0x0F])
+        driver._read_state_once()
+        with self.assertRaisesRegex(RuntimeError, "button state stale"):
+            driver.get_keys()
+
+    def test_cached_state_read_is_not_blocked_by_serial_transaction_lock(self):
+        driver = self.driver()
+        driver._read_state_once()
+        results = []
+        with driver._lock:
+            worker = threading.Thread(target=lambda: results.append(driver.get_keys()), daemon=True)
+            worker.start()
+            worker.join(timeout=.1)
+            self.assertFalse(worker.is_alive())
+        worker.join(timeout=1)
+        self.assertEqual(len(results), 1)
+
+    def test_missing_joint_startup_reply_has_bounded_wait(self):
+        driver = self.driver()
+        driver._joint_angles = None
+        with patch("dobot_control.dynamixel.driver.time.monotonic", side_effect=[0, 2]):
+            with self.assertRaisesRegex(RuntimeError, "within 1 second"):
+                driver.get_joints()
+
+    def test_reader_exception_reports_cause_and_invalidates_cached_state(self):
+        driver = self.driver()
+        driver._read_state_once = Mock(side_effect=OSError("USB removed"))
+        driver._read_joint_angles()
+        self.assertIn("USB removed", driver._reader_error)
+        driver._reading_thread.is_alive.return_value = False
+        for read in (driver.get_keys, driver.get_joints):
+            with self.assertRaisesRegex(RuntimeError, "USB removed"):
+                read()
+
+    def test_stale_joint_failure_names_hand_and_prevents_command_dispatch(self):
+        left, right = Mock(), Mock()
+        left.act.return_value = np.zeros(7)
+        right.act.side_effect = RuntimeError("Master joint state stale for more than 250 ms")
+        dispatch = Mock()
+        with self.assertRaisesRegex(RuntimeError, "RIGHT master joint read failed.*stale"):
+            action = BimanualAgent(left, right).act({})
+            dispatch(action)
+        dispatch.assert_not_called()
+
+    def test_real_main_loop_clears_servo_and_recording_before_stale_sample_dispatch(self):
+        from experiments import run_control as control
+        states = np.ones((2, 3), dtype=int)
+        agent, env = Mock(), Mock()
+        agent.act.side_effect = RuntimeError("RIGHT master joint read failed: stale")
+        env.get_obs.return_value = {"joint_positions": np.zeros(14)}
+        ini = configparser.ConfigParser()
+        for section in ("HAND_LEFT", "HAND_RIGHT"):
+            ini[section] = {"absolute_mapping_verified": "1", "physical_side": "unverified"}
+        class ReadyThread:
+            def __init__(self, target, args, daemon):
+                self.ready = args[3]
+            def start(self):
+                self.ready.set()
+            def is_alive(self):
+                return True
+        healthy = Mock()
+        healthy.is_alive.return_value = True
+        replacements = {
+            "mk_dir": Mock(), "BoundedAsyncWriter": Mock(),
+            "load_camera_settings": Mock(return_value=types.SimpleNamespace(
+                serials={"top":"111"}, fps=15, recording_enabled=True)),
+            "start_configured_cameras": Mock(return_value=(
+                {"top":healthy}, threading.Event(), threading.Event(), Mock())),
+            "load_ini_data_hands": Mock(return_value=(ini, {
+                "HAND_LEFT":Mock(port="COM6"), "HAND_RIGHT":Mock(port="COM5")})),
+            "DobotAgent":Mock(), "BimanualAgent":Mock(return_value=agent),
+            "ZMQClientRobot":Mock(), "RobotEnv":Mock(return_value=env),
+            "check_firmware_version":Mock(return_value=True),
+            "get_robot_type":Mock(return_value="Nova 2"), "robot_pose_init":Mock(),
+            "runtime_log":Mock(), "what_to_do":states, "is_falling":np.array([0]),
+        }
+        with ExitStack() as stack:
+            for name, value in replacements.items():
+                stack.enter_context(patch.object(control, name, value))
+            stack.enter_context(patch.object(control.threading, "Thread", ReadyThread))
+            stack.enter_context(patch.object(control.atexit, "register"))
+            with self.assertRaisesRegex(RuntimeError, "RIGHT master joint read failed"):
+                control.main(control.Args())
+        env.step.assert_not_called()
+        self.assertFalse(states[:, 1:].any())
+        self.assertEqual(replacements["runtime_log"].call_args.args[0], "MASTER_STATE_FAILURE")
 
 
 class BoundedAsyncWriterTests(unittest.TestCase):

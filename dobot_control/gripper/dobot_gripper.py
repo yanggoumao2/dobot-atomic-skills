@@ -1,4 +1,4 @@
-# gripper for hapatics2 
+# gripper for hapatics2
 import threading
 import time
 import struct
@@ -67,7 +67,7 @@ class DobotGripper:
         free_limit_and_set_one(f"/sys/bus/usb-serial/devices/{_port_name}/latency_timer")
 
     def ping(self) -> None:
-        """Connects to a gripper at the given address.       
+        """Connects to a gripper at the given address.
         :param port: usb com port  eg: /dev/ttyUSB0
         :param timeout: Timeout for blocking
         """
@@ -94,7 +94,7 @@ class DobotGripper:
         self._portHandler = None
         self._packHandler = None
         self.servo = None
-        # self.socket.close()    
+        # self.socket.close()
 
     def get_min_position(self) -> int:
         """Returns the minimum position the gripper can reach (open position)."""
@@ -155,7 +155,14 @@ class DobotGripper:
         # print("write pos ", localPos)
         # print("write spd ", localSpd)
 
-        return self.servo.WritePosEx(self._servo_id, localPos, localSpd, 0)
+        result, error = self.servo.WritePosEx(self._servo_id, localPos, localSpd, 0)
+        if result != COMM_SUCCESS or error != 0:
+            raise RuntimeError(
+                f"WritePosEx failed for servo ID {self._servo_id} on {self.port}: "
+                f"comm_result={result}, servo_error={error}; "
+                "motion may already have been sent, do not retry automatically"
+            )
+        return result, error
 
 
 def main():
