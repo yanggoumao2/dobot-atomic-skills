@@ -1,0 +1,68 @@
+{
+  "schema_version": "2.1",
+  "graph_version": "0.1",
+  "recipe_id": "dobot-chemistry-task",
+  "version": "1.0",
+  "catalog_revision": "dobot-82c50010a0437fb40b68",
+  "package_id": "guidance-pour_wait_pour",
+  "run_id": "pour_wait_pour-001",
+  "experiment_id": "experiment-pour_wait_pour",
+  "entry_node_ids": [
+    "pour_1"
+  ],
+  "nodes": [
+    {
+      "node_id": "pour_1",
+      "node_type": "action",
+      "status": "pending",
+      "skill_invocation": {
+        "skill_id": "embodied.pour",
+        "skill_version": "1.0.0",
+        "parameters": {
+          "source_object": "beaker",
+          "target_object": "tube",
+          "tilt_deg": 80,
+          "motion_speed": 20
+        }
+      }
+    },
+    {
+      "node_id": "settle",
+      "node_type": "wait",
+      "status": "pending",
+      "duration_s": 30,
+      "timeout_s": 120,
+      "on_fail": {
+        "strategy": "safe_stop",
+        "max_retries": 0
+      }
+    },
+    {
+      "node_id": "pour_2",
+      "node_type": "action",
+      "status": "pending",
+      "skill_invocation": {
+        "skill_id": "embodied.pour",
+        "skill_version": "1.0.0",
+        "parameters": {
+          "source_object": "beaker",
+          "target_object": "tube",
+          "tilt_deg": 45,
+          "motion_speed": 10
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "pour_1",
+      "target": "settle",
+      "edge_type": "success"
+    },
+    {
+      "source": "settle",
+      "target": "pour_2",
+      "edge_type": "success"
+    }
+  ]
+}
