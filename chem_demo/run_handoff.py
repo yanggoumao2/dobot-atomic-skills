@@ -880,6 +880,12 @@ def _build_video(directory, video, start_ms):
                         "--video", str(video), "--start-ms", str(start_ms), "--out", str(out)],
                        check=True, timeout=900, cwd=str(Path(__file__).resolve().parents[1]))
         print(f"对比视频：{out}", flush=True)
+        import shutil
+        fast = directory / "demo_side_by_side_3x.mp4"
+        subprocess.run([shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(out),
+                        "-filter:v", "setpts=PTS/3", "-an", "-c:v", "libx264", "-crf", "23", "-pix_fmt", "yuv420p",
+                        "-r", "30", str(fast)], check=True, timeout=600)
+        print(f"3 倍速：{fast}", flush=True)
     except Exception as error:  # noqa: BLE001 - the run itself is already recorded
         print(f"对比视频合成失败：{error}", flush=True)
 

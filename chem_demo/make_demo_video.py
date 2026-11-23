@@ -36,6 +36,20 @@ class Event:
     t: float            # epoch seconds when the result existed
     title: str
     image: np.ndarray
+    source: str = "top_neck"
+
+
+# One tile per camera / recognition, all on screen at once (canvas 1920x1080: front video 1280x720
+# top-left, three 640x360 tiles down the right, two along the bottom).
+TILES = [
+    ("top_neck", "顶视 · 瓶口定位", (1280, 0)),
+    ("left_wrist", "左腕 · 悬停/抬起核验", (1280, 360)),
+    ("scene", "顶视 · 烧杯识别 DINO+SAM2", (1280, 720)),
+    ("top_hold", "顶视 · 悬挂拟合 / 倾倒对准", (0, 720)),
+    ("right_wrist", "右腕 · SAM2 瓶身分割", (640, 720)),
+]
+TILE = (640, 360)
+HIGHLIGHT_S = 2.0
 
 
 def _font(size: int):
@@ -103,9 +117,9 @@ def neck_events(run: Path) -> list[Event]:
         rim = getattr(r, "rim", None)
         if rim is not None:
             image = _ellipse(image, rim)
-        events.append(Event(_mtime(path), "左腕相机：悬停核对瓶口与两指的相对位置", image))
+        events.append(Event(_mtime(path), "左腕相机：悬停核对瓶口与两指的相对位置", image, "left_wrist"))
     for path in sorted(run.glob("[0-9][0-9]_lift.png")):
-        events.append(Event(_mtime(path), "左腕相机：抬起核验（深度判断是否夹住）", cv2.imread(str(path))))
+        events.append(Event(_mtime(path), "左腕相机：抬起核验（深度判断是否夹住）", cv2.imread(str(path)), "left_wrist"))
     return events
 
 
@@ -113,7 +127,8 @@ def handoff_events(run: Path) -> list[Event]:
     events = []
     fit_path = run / "hang_top_fit.png"
     if fit_path.exists():
-        events.append(Event(_mtime(fit_path), "顶视相机：SAM2 分割被举瓶子 + 圆柱拟合悬挂位置", cv2.imread(str(fit_path))))
+        events.append(Event(_mtime(fit_path), "顶视相机：SAM2 分割被举瓶子 + 圆柱拟合悬挂位置", cv2.imread(str(fit_path)),
+                            "top_hold"))
     for mask_path in sorted(run.glob("seg_*_mask.png")):
         frame_path = mask_path.with_name(mask_path.name.replace("_mask", ""))
         frame, mask = cv2.imread(str(frame_path)), cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
@@ -130,7 +145,7 @@ def handoff_events(run: Path) -> list[Event]:
             err = json.loads(obs.read_text(encoding="utf-8")).get("error")
             if isinstance(err, (list, tuple)) and len(err) >= 3:
                 text += f"  误差 ({err[0]:+.0f},{err[1]:+.0f}) 距离 {err[2]:.0f} mm"
-        events.append(Event(_mtime(mask_path), text, over))
+        events.append(Event(_mtime(mask_path), text, over, "right_wrist"))
     return events
 
 
@@ -138,7 +153,8 @@ def pour_events(pour: Path) -> list[Event]:
     events = []
     loc = pour / "locate" / "locate.jpg"
     if loc.exists():
-        events.append(Event(_mtime(loc), "顶视相机：DINO+SAM2 识别烧杯/瓶子，圆柱拟合三维位置（倒液目标）", cv2.imread(str(loc))))
+        events.append(Event(_mtime(loc), "顶视相机：DINO+SAM2 识别烧杯/瓶子，圆柱拟合三维位置（倒液目标）", cv2.imread(str(loc)),
+                            "scene"))
     top = pour / "top_pour.png"
     plan_path, result = pour / "pour_plan.json", pour.parent / "result.json"
     if top.exists() and plan_path.exists():
@@ -147,37 +163,52 @@ def pour_events(pour: Path) -> list[Event]:
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
         beaker = Vessel(**plan["beaker"])
         image = lip_overlay(cv2.imread(str(top)), plan["lip_xyz"], beaker)
-        events.append(Event(_mtime(top), "顶视相机：倾倒中，红点=规划瓶口唇边，绿圈=识别出的杯口", image))
+        events.append(Event(_mtime(top), "顶视相机：倾倒中，红点=规划瓶口唇边，绿圈=识别出的杯口", image, "top_hold"))
     return events
+
+
+def _tile_image(event: Event | None, label: str, age: float | None, hot: bool) -> np.ndarray:
+    if event is None:
+        tile = caption(np.zeros((TILE[1], TILE[0], 3), np.uint8), [label, "等待识别"], 22)
+    else:
+        lines = [label, event.title.split("：", 1)[-1][:34]]
+        tile = caption(fit(event.image, TILE), lines, 20)
+        tile = caption(tile, [f"{int(age)} s 前"], 18, top=False)
+    colour = (0, 230, 255) if hot else (70, 70, 70)
+    cv2.rectangle(tile, (1, 1), (TILE[0] - 2, TILE[1] - 2), colour, 5 if hot else 2)
+    return tile
 
 
 def build(run: Path, video: Path, start_ms: float, out: Path) -> Path:
     events = sorted(neck_events(run) + handoff_events(run) + pour_events(run / "pour"), key=lambda e: e.t)
-    panels = [(e.t, caption(fit(e.image), [e.title], 24)) for e in events]
     cap = cv2.VideoCapture(str(video))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     writer = None
     raw = out.with_suffix(".raw.mp4")
-    blank = caption(np.zeros((PANEL[1], PANEL[0], 3), np.uint8), ["等待第一次识别"], 26)
     index = 0
+    cache: dict[tuple, np.ndarray] = {}
     while True:
         ok, frame = cap.read()
         if not ok:
             break
         t = start_ms / 1000.0 + index / fps
         index += 1
-        current = None
-        for et, panel in panels:
-            if et <= t:
-                current = (et, panel)
-            else:
-                break
-        right = blank if current is None else caption(current[1].copy(), [f"识别于 {t - current[0]:.1f} s 前"], 22, top=False)
-        left = caption(fit(frame), ["正面相机（原始画面）", f"t = {index / fps:5.1f} s"], 24)
-        both = np.hstack([left, right])
+        canvas = np.zeros((1080, 1920, 3), np.uint8)
+        canvas[0:720, 0:1280] = caption(fit(frame, (1280, 720)), [f"正面相机（原始画面）  t = {index / fps:5.1f} s"], 26)
+        for source, label, (x, y) in TILES:
+            latest = None
+            for e in events:
+                if e.source == source and e.t <= t:
+                    latest = e
+            age = None if latest is None else t - latest.t
+            hot = age is not None and age < HIGHLIGHT_S
+            key = (source, id(latest), hot, None if age is None else int(age))
+            if key not in cache:
+                cache[key] = _tile_image(latest, label, age, hot)
+            canvas[y:y + TILE[1], x:x + TILE[0]] = cache[key]
         if writer is None:
-            writer = cv2.VideoWriter(str(raw), cv2.VideoWriter_fourcc(*"mp4v"), fps, (both.shape[1], both.shape[0]))
-        writer.write(both)
+            writer = cv2.VideoWriter(str(raw), cv2.VideoWriter_fourcc(*"mp4v"), fps, (1920, 1080))
+        writer.write(canvas)
     cap.release()
     if writer is None:
         raise RuntimeError("录像里没有读到画面")
