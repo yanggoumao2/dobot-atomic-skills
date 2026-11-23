@@ -39,5 +39,29 @@ class SegmentsTest(unittest.TestCase):
         self.assertEqual([s["index"] for s in back], list(range(10, -1, -1)))
 
 
+
+class GraspOffsetTest(unittest.TestCase):
+    """chem_demo.grasp_offset: the predicted mouth ring moves rigidly with the in-hand offset."""
+
+    def _plan(self):
+        return {"pour_dir": [1.0, 0.0, 0.0], "theta_pre_deg": 60.0, "lip_xyz": [0.0, -700.0, 280.0],
+                "steps": [{"phase": "transit", "lip": [-80.0, -700.0, 300.0]}]}
+
+    def test_upright_ring_shifts_by_the_offset(self):
+        import numpy as np
+        from chem_demo.grasp_offset import ring_points
+        tool = np.array([0.0, -1.0, 0.0])
+        a, _ = ring_points(self._plan(), tool, np.zeros(3))
+        b, _ = ring_points(self._plan(), tool, np.array([10.0, 20.0, 5.0]))
+        np.testing.assert_allclose(b.mean(axis=0) - a.mean(axis=0), [5.0, -10.0, 20.0], atol=1e-6)
+
+    def test_tilted_ring_keeps_the_lip_on_its_rim(self):
+        import numpy as np
+        from chem_demo.grasp_offset import ring_points
+        _, t = ring_points(self._plan(), np.array([0.0, -1.0, 0.0]), np.zeros(3))
+        lip = np.array([0.0, -700.0, 280.0 + 180.0])   # ring points are in the fingertip convention
+        self.assertLess(float(np.min(np.linalg.norm(t - lip, axis=1))), 1e-6)
+
+
 if __name__ == "__main__":
     unittest.main()
