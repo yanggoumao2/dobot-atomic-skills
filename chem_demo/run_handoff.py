@@ -589,7 +589,7 @@ def _execute(args, directory, outcome):
                     return {"ok": False, "reason": reply.get("error", "vision worker failed")}
                 measurement = reply["measurement"]
                 print("顶视实测瓶子悬挂：", json.dumps({k: measurement.get(k) for k in
-                      ("ok", "reason", "xy_offset_mm", "bottom_offset_mm", "rms_px")}, ensure_ascii=False), flush=True)
+                      ("ok", "reason", "xy_offset_mm", "bottom_offset_mm", "along_ray_mm", "across_ray_mm", "rms_px")}, ensure_ascii=False), flush=True)
                 return measurement
 
             loaded = gripper["loaded_closed_final"]

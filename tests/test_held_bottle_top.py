@@ -67,5 +67,38 @@ class FitTest(unittest.TestCase):
                          (outline[:, 1] < 720)).all())
 
 
+@unittest.skipIf(CAMERA is None, "top-camera calibration not present")
+class RayGateTest(unittest.TestCase):
+    """Real hang checks 2026-11-22/23 (handoff_cycle.json): the offset lies along the camera ray."""
+
+    CASES = [  # predicted axis xy, predicted bottom, measured xy offset, bottom offset
+        ((0.0, -380.0), 454.34, (21.70, -6.36), 36.35),
+        ((129.97, -357.08), 454.34, (14.07, -4.98), 30.95),
+        ((72.93, -413.62), 424.34, (13.57, -2.90), 28.86),
+        ((72.93, -413.62), 424.34, (30.45, -7.32), 54.90),   # left beaker behind the bottle; refused before
+    ]
+
+    def test_real_offsets_are_mostly_along_the_ray(self):
+        from chem_demo.held_bottle_top import MAX_ACROSS_RAY_MM, MAX_ALONG_RAY_MM, split_along_ray
+        for xy, bottom, dxy, dz in self.CASES:
+            along, across = split_along_ray(CAMERA, xy, bottom, [*dxy, dz])
+            self.assertLess(float(np.linalg.norm(across)), 12.0)
+            self.assertLess(float(np.linalg.norm(across)), MAX_ACROSS_RAY_MM)
+            self.assertLess(abs(along), MAX_ALONG_RAY_MM)
+
+    def test_a_sideways_slip_is_still_caught(self):
+        from chem_demo.held_bottle_top import MAX_ACROSS_RAY_MM, split_along_ray
+        # A bottle 40 mm off sideways (horizontal, across the ray) is refused. A straight drop is mostly
+        # ALONG this ray, so this gate cannot see it: the jaw reading and the right wrist's first-look
+        # height gate (handoff_cycle, 50 mm) cover that case.
+        xy, bottom = (72.93, -413.62), 424.34
+        centre = np.array([xy[0], xy[1], bottom + 67.0])
+        ray = centre - CAMERA.center
+        side = np.cross(ray, [0.0, 0.0, 1.0])
+        side = 40.0 * side / np.linalg.norm(side)
+        _, across = split_along_ray(CAMERA, xy, bottom, side)
+        self.assertGreater(float(np.linalg.norm(across)), MAX_ACROSS_RAY_MM)
+
+
 if __name__ == "__main__":
     unittest.main()

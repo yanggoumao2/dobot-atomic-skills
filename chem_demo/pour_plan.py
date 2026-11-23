@@ -83,6 +83,13 @@ class PourConfig:
     step_mm: float = 10.0
     step_deg: float = 5.0
     hold_shift_mm: float = HOLD_SHIFT_MM
+    # Measured bottle-in-hand correction: the bottle sits this far further along the tool axis than
+    # the pad-offset model says (2026-11-23 pretilt top + front frames: ~+20 mm).
+    grasp_along_tool_mm: float = 0.0
+    # ... and this far higher / further along the pour direction (upright hold). Solved 2026-11-23 from
+    # the blue mouth ring in two top frames (upright side hover + 60 deg pre-tilt): ~+26 up, ~+12 along d.
+    grasp_up_mm: float = 0.0
+    grasp_along_pour_mm: float = 0.0
     max_radius_mm: float = 640.0      # right flange horizontal radius guard (as the handoff planner)
 
     def to_dict(self) -> dict[str, Any]:
@@ -170,10 +177,15 @@ class PourGeometry:
     fraction, tilt samples by the lip position and the tilt angle.
     """
 
-    def __init__(self, hold_xyz: Sequence[float], hold_rpy: Sequence[float], beaker: Vessel, yaw_deg: float = 0.0):
+    def __init__(self, hold_xyz: Sequence[float], hold_rpy: Sequence[float], beaker: Vessel, yaw_deg: float = 0.0,
+                 grasp_along_tool_mm: float = 0.0, grasp_up_mm: float = 0.0, grasp_along_pour_mm: float = 0.0):
         self.hold_p = np.asarray(hold_xyz, float)
         self.hold_R = _rot([float(v) for v in hold_rpy])
         self.grasp = self.hold_p + self.hold_R @ np.asarray(pad_offset_flange(), float)
+        tool = self.hold_R[:, 2].copy()
+        tool[2] = 0.0
+        if np.linalg.norm(tool) > 0.5:
+            self.grasp = self.grasp + tool / np.linalg.norm(tool) * float(grasp_along_tool_mm)
         self.up = np.array([0.0, 0.0, 1.0])
         self.yaw = float(yaw_deg)
         Rz = _rotm(self.up, self.yaw)
@@ -188,6 +200,9 @@ class PourGeometry:
         to_beaker = np.array([beaker.x, beaker.y, 0.0]) - np.array([self.grasp[0], self.grasp[1], 0.0])
         self.d = perp * (1.0 if float(perp @ to_beaker) >= 0 else -1.0)   # pour direction
         self.k = np.cross(self.up, self.d)                   # tilt axis: up -> d for positive angles
+        # Measured bottle-in-hand offsets move the bottle model (and its lip) relative to the jaws.
+        self.grasp = self.grasp + self.up * float(grasp_up_mm) + self.d * float(grasp_along_pour_mm)
+        self.v_p = self.grasp + Rz @ (self.hold_p - self.grasp)  # yaw turns about the (corrected) bottle axis
         self.frame = np.column_stack([self.d, self.k, self.up])
         self.lip_offset = self.up * (BOTTLE_HEIGHT_MM - GRASP_ABOVE_BOTTOM_MM) + self.d * NECK_RADIUS_MM
         self.lip_hold = self.grasp + self.lip_offset
@@ -268,7 +283,8 @@ def plan_pour(hold_xyz: Sequence[float], hold_rpy: Sequence[float], hold_joints:
 
     for height in cfg.lip_heights_mm:
         for yaw in cfg.yaw_candidates_deg:
-            geo = PourGeometry(hold_xyz, hold_rpy, beaker, yaw)
+            geo = PourGeometry(hold_xyz, hold_rpy, beaker, yaw, cfg.grasp_along_tool_mm, cfg.grasp_up_mm,
+                               cfg.grasp_along_pour_mm)
             # bottom above the highest rim on the way + margin
             transit_dz = max(0.0, highest + cfg.transit_clear_mm - (geo.grasp[2] - GRASP_ABOVE_BOTTOM_MM))
             # side hover: bottle beside the beaker along -d, lined up with it along the tool axis
@@ -361,7 +377,8 @@ def reverse_steps(plan: PourPlan) -> list[dict[str, Any]]:
 def side_view_svg(plan: PourPlan, hold_xyz: Sequence[float], hold_rpy: Sequence[float], beaker: Vessel,
                   obstacles: Sequence[Vessel] = ()) -> str:
     """Section in the pour plane (horizontal d, vertical z) with bottle outlines along the path."""
-    geo = PourGeometry(hold_xyz, hold_rpy, beaker, plan.yaw_deg)
+    geo = PourGeometry(hold_xyz, hold_rpy, beaker, plan.yaw_deg, plan.config.get("grasp_along_tool_mm", 0.0),
+                       plan.config.get("grasp_up_mm", 0.0), plan.config.get("grasp_along_pour_mm", 0.0))
     d = geo.d
     ox = float(np.array([beaker.x, beaker.y, 0.0]) @ d)
 

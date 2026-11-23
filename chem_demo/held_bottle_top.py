@@ -41,6 +41,12 @@ VOCABULARY = {"glass bottle": "bottle", "glass jar": "bottle", "bottle": "bottle
 # to the right wrist's close-range fine alignment, which may shift the hand up to 40 mm.
 MAX_XY_OFFSET_MM = 40.0
 MAX_BOTTOM_OFFSET_MM = 40.0
+# One oblique view measures distance along the camera ray poorly: in all four handoffs 2026-11-22/23 the
+# offset lay along the ray (-31 to -63 mm, the -63 with the left beaker right behind the bottle) while
+# the part across the ray was 7-9 mm. So the across-ray part is gated tightly and the along-ray part
+# only against gross errors; the XY/bottom gates above apply to the across-ray offset.
+MAX_ACROSS_RAY_MM = 25.0
+MAX_ALONG_RAY_MM = 100.0
 MAX_RMS_PX = 4.0
 
 
@@ -54,6 +60,8 @@ class HeldBottle:
     bottom_z: float | None = None
     xy_offset_mm: tuple[float, float] | None = None
     bottom_offset_mm: float | None = None
+    along_ray_mm: float | None = None
+    across_ray_mm: float | None = None
     rms_px: float | None = None
     kept_share: float | None = None
     mask_iou_with_prediction: float | None = None
@@ -63,6 +71,18 @@ class HeldBottle:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def split_along_ray(camera: Camera, xy: Sequence[float], bottom: float,
+                    offset: Sequence[float]) -> tuple[float, np.ndarray]:
+    """Offset (dx, dy, dz) split into its part along the camera ray through the predicted bottle centre
+    (signed, + away from the camera) and the remaining across-ray vector."""
+    centre = np.array([float(xy[0]), float(xy[1]), float(bottom) + BOTTLE_HEIGHT_MM / 2.0])
+    ray = centre - np.asarray(camera.center, float)
+    ray /= np.linalg.norm(ray)
+    o = np.asarray(offset, float)
+    along = float(o @ ray)
+    return along, o - along * ray
 
 
 def predicted_hang(flange_pose: Sequence[float]) -> tuple[np.ndarray, float]:
@@ -177,13 +197,19 @@ def measure_held_bottle(image: np.ndarray, left_camera: Camera, flange_pose: Seq
                         xy_offset_mm=(float(offset[0]), float(offset[1])),
                         bottom_offset_mm=float(params[2] - bottom), rms_px=rms, kept_share=kept,
                         mask_iou_with_prediction=iou, mask_score=float(chosen.score), **base)
+    along, across = split_along_ray(left_camera, xy, bottom, [offset[0], offset[1], params[2] - bottom])
+    result.along_ray_mm, result.across_ray_mm = float(along), float(np.linalg.norm(across))
     failed = []
     if rms > MAX_RMS_PX:
         failed.append(f"fit rms {rms:.1f} px > {MAX_RMS_PX}")
-    if math.hypot(*offset) > MAX_XY_OFFSET_MM:
-        failed.append(f"axis {math.hypot(*offset):.0f} mm from the flange axis")
-    if abs(params[2] - bottom) > MAX_BOTTOM_OFFSET_MM:
-        failed.append(f"bottom {params[2] - bottom:+.0f} mm from the predicted hang")
+    if abs(along) > MAX_ALONG_RAY_MM:
+        failed.append(f"{along:+.0f} mm along the camera ray")
+    if float(np.linalg.norm(across)) > MAX_ACROSS_RAY_MM:
+        failed.append(f"{float(np.linalg.norm(across)):.0f} mm across the camera ray")
+    if math.hypot(across[0], across[1]) > MAX_XY_OFFSET_MM:
+        failed.append(f"axis {math.hypot(across[0], across[1]):.0f} mm from the flange axis (across the ray)")
+    if abs(across[2]) > MAX_BOTTOM_OFFSET_MM:
+        failed.append(f"bottom {across[2]:+.0f} mm from the predicted hang (across the ray)")
     if failed:
         result.ok, result.reason = False, "; ".join(failed)
     return result, mask

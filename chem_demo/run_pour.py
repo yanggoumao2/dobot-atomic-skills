@@ -34,7 +34,7 @@ from chem_demo.pour_plan import PourConfig, PourInfeasible, PourPlan, Vessel, pl
 
 POUR_DATA = Path(__file__).resolve().parents[1] / "calibration-data" / "chem-demo" / "pour"
 RIGHT_SPEED_PERCENT = 12
-CP_RATIO = 50                  # blend between the queued joint samples of one phase
+CP_RATIO = 80                  # blend between queued joint samples (50 left a visible halt at each sample)
 DEFAULT_DWELL_S = 4.0
 ARRIVAL_POSITION_TOL_MM = 1.5
 ARRIVAL_ORIENTATION_TOL_DEG = 1.0
@@ -79,6 +79,33 @@ def scene_from_locate(vessels: Mapping[str, Mapping[str, Any]], target: str = "l
     return beaker, obstacles
 
 
+def lip_overlay(image, lip_xyz: Sequence[float], beaker: Vessel,
+                fingertip_mm: float = FINGERTIP_FROM_FLANGE_MM):
+    """Top frame with the planned lip (red dot) and the target rim circle (green) projected on it.
+
+    Controller Z -> fingertip convention (cw) of the top-camera calibration: cw = real + flange->tips.
+    """
+    import cv2
+
+    from chem_demo.camera_drift import load_corrected_camera
+    from vision_pick.cup_locate import DEFAULT_SESSION
+
+    camera = load_corrected_camera(DEFAULT_SESSION, "right")
+    out = image.copy()
+    a = np.linspace(0.0, 2.0 * math.pi, 72)
+    rim = np.column_stack([beaker.x + beaker.radius * np.cos(a), beaker.y + beaker.radius * np.sin(a),
+                           np.full_like(a, beaker.top_z + fingertip_mm)])
+    axis = np.array([[beaker.x, beaker.y, beaker.top_z + fingertip_mm]])
+    lip = np.array([[lip_xyz[0], lip_xyz[1], lip_xyz[2] + fingertip_mm]])
+    cv2.polylines(out, [camera.project(rim).astype(np.int32)], True, (0, 220, 0), 2)
+    for pts, colour in ((axis, (0, 220, 0)), (lip, (0, 0, 255))):
+        u, v = camera.project(pts)[0]
+        cv2.circle(out, (int(round(u)), int(round(v))), 5, colour, -1)
+    cv2.putText(out, "red: planned lip, green: rim + axis", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                (0, 0, 255), 2)
+    return out
+
+
 def wrist_up(joints: Sequence[float], flange_z: float) -> bool:
     """True if J4 sits above the flange (the branch the pour planner can use)."""
     from chem_demo.nova2_model import link_points
@@ -111,6 +138,16 @@ def phases(plan: PourPlan, until: str | None) -> list[tuple[str, list[dict[str, 
             groups.append((step["phase"], []))
         groups[-1][1].append(step)
     return groups
+
+
+def segments(forward: Sequence[tuple[str, list[dict[str, Any]]]], continuous: bool
+             ) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Groups the controller runs without stopping. The full pour queues lift -> pour as ONE blended
+    motion (no arrival wait, jaw read or photo between phases, which made it stop-and-go); the
+    --until rehearsals keep one group per phase so each phase can be photographed."""
+    if not continuous or not forward:
+        return [(name, list(steps)) for name, steps in forward]
+    return [("+".join(name for name, _ in forward), [s for _, steps in forward for s in steps])]
 
 
 def way_back(forward: Sequence[tuple[str, list[dict[str, Any]]]], hold: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -164,9 +201,17 @@ def _run(args, directory: Path, outcome: dict) -> bool:
             raise RuntimeError("；".join(problems))
 
         # --- scene: the balances move between sessions, so the vessels are located now
-        top = sight.top_frame()
         top_path = directory / "top_start.png"
-        cv2.imwrite(str(top_path), top)
+        cv2.imwrite(str(top_path), sight.top_frame())
+        if args.scene_image:
+            # The held bottle hides the target beaker from the top camera at the hold pose, so the
+            # vessels are located in a frame taken just before the handoff (arms at the photo pose).
+            scene = cv2.imread(str(args.scene_image))
+            if scene is None:
+                raise RuntimeError(f"读不到场景图 {args.scene_image}")
+            top_path = directory / "top_scene.png"
+            cv2.imwrite(str(top_path), scene)
+            outcome["scene_image"] = str(args.scene_image)
         client = VisionClient()
         stack.callback(client.close)
         reply = client.locate_top(str(top_path), str(directory / "locate"))
@@ -183,7 +228,9 @@ def _run(args, directory: Path, outcome: dict) -> bool:
         T = _t_right_left(sight)
         cfg = HandoffConfig(body_model=True)
         other = arm_capsules_in(np.asarray(T), left_state["joints"], left_state["pose"][3:], cfg, "left")
-        pour_cfg = PourConfig(theta_max_deg=args.theta_max)
+        pour_cfg = PourConfig(theta_max_deg=args.theta_max, grasp_along_tool_mm=args.grasp_shift_mm,
+                              grasp_up_mm=args.grasp_up_mm, grasp_along_pour_mm=args.grasp_pour_mm,
+                              lip_back_mm=args.lip_back_mm)
         ik = CachedIK(right.plan, "right")
         started = time.monotonic()
         try:
@@ -235,15 +282,28 @@ def _run(args, directory: Path, outcome: dict) -> bool:
                     raise RuntimeError(f"{name} 后右爪读数 {jaw}→{now}，可能滑瓶，停止")
                 print(f"{name} 完成，右爪 {now}", flush=True)
 
-            for name, steps in forward:
+            for name, steps in segments(forward, continuous=args.until is None):
                 run_phase(name, steps)
                 if name == "transit":
                     cv2.imwrite(str(directory / "top_side.png"), sight.top_frame())
                     front("side")
+                if name == "pretilt":
+                    # Where the lip should be vs the beaker, drawn on the calibrated top camera.
+                    try:
+                        top = sight.top_frame()
+                        cv2.imwrite(str(directory / "top_pretilt.png"), top)
+                        cv2.imwrite(str(directory / "top_pretilt_overlay.png"),
+                                    lip_overlay(top, plan.lip_xyz, beaker))
+                    except Exception as error:  # noqa: BLE001 - a picture never blocks the return path
+                        print(f"预倾顶视取帧失败：{error}", flush=True)
             if args.until is None:
-                front("pour")
+                end = time.monotonic() + args.dwell_s   # the photos are taken inside the dwell
                 print(f"倾倒中，停留 {args.dwell_s:.1f} s", flush=True)
-                end = time.monotonic() + args.dwell_s
+                front("pour")
+                try:
+                    cv2.imwrite(str(directory / "top_pour.png"), sight.top_frame())
+                except Exception as error:  # noqa: BLE001
+                    print(f"倾倒顶视取帧失败：{error}", flush=True)
                 while time.monotonic() < end:
                     if _stop_key():
                         break
@@ -282,6 +342,14 @@ def main(argv=None) -> int:
                         help="右爪持瓶读数范围（11-23 实测 180）")
     parser.add_argument("--jaw-change-limit", type=int, default=8)
     parser.add_argument("--no-front", action="store_true", help="不用正面 C920 取帧")
+    parser.add_argument("--grasp-shift-mm", type=float, default=0.0,
+                        help="瓶子在爪中比模型沿工具轴多出的距离（由预倾顶视/正面测得）")
+    parser.add_argument("--grasp-up-mm", type=float, default=0.0, help="瓶子在爪中比模型高出的距离")
+    parser.add_argument("--grasp-pour-mm", type=float, default=0.0, help="瓶子在爪中比模型沿倾倒方向多出的距离")
+    parser.add_argument("--lip-back-mm", type=float, default=PourConfig.lip_back_mm,
+                        help="唇边目标点离杯轴往回收的距离（沿倾倒方向）")
+    parser.add_argument("--scene-image", type=Path, default=None,
+                        help="用这张顶视图定位烧杯（如交接开始时两臂在拍照位拍的 01_top.png）；持瓶时瓶子会挡住目标烧杯")
     args = parser.parse_args(argv)
     if args.until and not args.live:
         parser.error("--until 只能和 --live 一起用")
