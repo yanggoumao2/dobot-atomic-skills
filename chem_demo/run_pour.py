@@ -33,7 +33,7 @@ from chem_demo.handoff_plan import HandoffConfig, _rot, _tool_axis, arm_capsules
 from chem_demo.pour_plan import PourConfig, PourInfeasible, PourPlan, Vessel, plan_pour, reverse_steps, side_view_svg
 
 POUR_DATA = Path(__file__).resolve().parents[1] / "calibration-data" / "chem-demo" / "pour"
-RIGHT_SPEED_PERCENT = 12
+RIGHT_SPEED_PERCENT = 16
 CP_RATIO = 80                  # blend between queued joint samples (50 left a visible halt at each sample)
 DEFAULT_DWELL_S = 4.0
 ARRIVAL_POSITION_TOL_MM = 1.5
@@ -42,6 +42,7 @@ ARRIVAL_ORIENTATION_TOL_DEG = 1.0
 ROD_RADIUS_MM, ROD_ABOVE_RIM_MM = 8.0, 120.0     # glass rod standing in the centre beaker
 RACK_RADIUS_MM, RACK_HEIGHT_MM = 90.0, 110.0     # tube rack footprint / height above the table
 PAN_RADIUS_MM = 110.0                            # balance footprint around a pan beaker
+MEASURED_GRASP_OFFSET_MM = (16.4, 25.3, 19.5)    # bottle in the right jaws vs the model (see add_pour_arguments)
 
 
 # ----------------------------------------------------------------------------- pure helpers (tested)
@@ -214,110 +215,23 @@ def _run(args, directory: Path, outcome: dict) -> bool:
             outcome["scene_image"] = str(args.scene_image)
         client = VisionClient()
         stack.callback(client.close)
-        reply = client.locate_top(str(top_path), str(directory / "locate"))
-        if not reply.get("ok"):
-            raise RuntimeError(f"顶视定位失败：{reply.get('error')}")
-        report = json.loads((directory / "locate" / "locate.json").read_text(encoding="utf-8"))
-        rack = report.get("rack") or {}
-        beaker, obstacles = scene_from_locate(reply["vessels"], args.target, rack_xy=rack.get("approx_xy"))
-        outcome["scene"] = {"beaker": beaker.to_dict(), "obstacles": [o.to_dict() for o in obstacles],
-                            "notes": reply.get("notes")}
-        print("目标烧杯（控制器坐标）：", json.dumps(beaker.to_dict(), ensure_ascii=False), flush=True)
-
-        # --- plan with controller IK (read-only queries)
-        T = _t_right_left(sight)
-        cfg = HandoffConfig(body_model=True)
-        other = arm_capsules_in(np.asarray(T), left_state["joints"], left_state["pose"][3:], cfg, "left")
-        pour_cfg = PourConfig(theta_max_deg=args.theta_max, grasp_along_tool_mm=args.grasp_shift_mm,
-                              grasp_up_mm=args.grasp_up_mm, grasp_along_pour_mm=args.grasp_pour_mm,
-                              lip_back_mm=args.lip_back_mm)
-        ik = CachedIK(right.plan, "right")
-        started = time.monotonic()
-        try:
-            plan = plan_pour(right_state["pose"][:3], right_state["pose"][3:], right_state["joints"], beaker, obstacles,
-                             ik, fk=right.forward, cfg=pour_cfg, arm_cfg=cfg, other_arm=other)
-        except PourInfeasible as error:
-            outcome["plan_rejected"] = error.rejected
-            raise
-        outcome["plan"] = {"lip_xyz": plan.lip_xyz, "lip_above_rim_mm": plan.lip_above_rim_mm,
-                           "theta_pre_deg": plan.theta_pre_deg, "theta_max_deg": plan.theta_max_deg,
-                           "yaw_deg": plan.yaw_deg, "min_clearance": plan.min_clearance, "samples": len(plan.steps),
-                           "ik_queries": ik.calls, "seconds": round(time.monotonic() - started, 1)}
-        (directory / "pour_plan.json").write_text(json.dumps(plan.to_dict(), ensure_ascii=False, indent=1), encoding="utf-8")
-        (directory / "pour_side.svg").write_text(side_view_svg(plan, right_state["pose"][:3], right_state["pose"][3:],
-                                                               beaker, obstacles), encoding="utf-8")
-        print("倒液规划（只读查询）可行：", json.dumps(outcome["plan"], ensure_ascii=False), flush=True)
+        beaker, obstacles = locate_scene(client, top_path, directory, args.target, outcome)
+        right_state = {**right_state}
+        pour_cfg = pour_config(args)
+        plan = plan_for_hold(right, sight, left_state, right_state, beaker, obstacles, pour_cfg, directory, outcome)
         if args.preflight:
             return True
-
-        # --- execute
-        forward = phases(plan, args.until)
-        attempted = False
         try:
             if _stop_key():
                 raise RuntimeError("已取消")
-            attempted = True
             front("before")
             right.open_session(home=False)
             _joint_speed(right)
-            if _reply_status(right.rig.dashboard.CP(CP_RATIO)) != 0:
-                raise RuntimeError("CP 设置未被控制器确认")
-
-            def run_phase(name: str, steps: Sequence[Mapping[str, Any]]) -> None:
-                if _stop_key():
-                    raise RuntimeError(f"空格：在 {name} 之前停止")
-                for s in steps:
-                    right.move_joint(s["xyz"], s["rpy"], s["joints"])
-                last = steps[-1]
-                right.wait(last["xyz"], last["rpy"], last["joints"], _stop_key, timeout_s=30.0 + 3.0 * len(steps))
-                pose = right.read()["pose"]
-                err_p = max(abs(pose[i] - last["xyz"][i]) for i in range(3))
-                err_r = _rotation_angle_deg(pose[3:], last["rpy"])
-                if err_p > ARRIVAL_POSITION_TOL_MM or err_r > ARRIVAL_ORIENTATION_TOL_DEG:
-                    raise RuntimeError(f"{name} 末点未到位（{err_p:.2f} mm, {err_r:.2f}°）")
-                now = int(right.gripper_position())
-                outcome.setdefault("phases", []).append({"phase": name, "measured": pose, "jaw": now,
-                                                         "time": datetime.now().isoformat(timespec="milliseconds")})
-                if abs(now - jaw) > args.jaw_change_limit:
-                    raise RuntimeError(f"{name} 后右爪读数 {jaw}→{now}，可能滑瓶，停止")
-                print(f"{name} 完成，右爪 {now}", flush=True)
-
-            for name, steps in segments(forward, continuous=args.until is None):
-                run_phase(name, steps)
-                if name == "transit":
-                    cv2.imwrite(str(directory / "top_side.png"), sight.top_frame())
-                    front("side")
-                if name == "pretilt":
-                    # Where the lip should be vs the beaker, drawn on the calibrated top camera.
-                    try:
-                        top = sight.top_frame()
-                        cv2.imwrite(str(directory / "top_pretilt.png"), top)
-                        cv2.imwrite(str(directory / "top_pretilt_overlay.png"),
-                                    lip_overlay(top, plan.lip_xyz, beaker))
-                    except Exception as error:  # noqa: BLE001 - a picture never blocks the return path
-                        print(f"预倾顶视取帧失败：{error}", flush=True)
-            if args.until is None:
-                end = time.monotonic() + args.dwell_s   # the photos are taken inside the dwell
-                print(f"倾倒中，停留 {args.dwell_s:.1f} s", flush=True)
-                front("pour")
-                try:
-                    cv2.imwrite(str(directory / "top_pour.png"), sight.top_frame())
-                except Exception as error:  # noqa: BLE001
-                    print(f"倾倒顶视取帧失败：{error}", flush=True)
-                while time.monotonic() < end:
-                    if _stop_key():
-                        break
-                    time.sleep(0.05)
-            elif args.until == "pretilt":
-                front("pretilt")
-            back = way_back(forward, plan.steps[0])
-            run_phase("return", back)
-            cv2.imwrite(str(directory / "top_end.png"), sight.top_frame())
-            front("after")
-            outcome["status"] = "poured_and_back" if args.until is None else f"stopped_after_{args.until}_and_back"
-            return True
+            return execute_pour(right, sight, plan, beaker, until=args.until, dwell_s=args.dwell_s, jaw=jaw,
+                                jaw_change_limit=args.jaw_change_limit, directory=directory, outcome=outcome,
+                                front=front)
         except BaseException:
-            if attempted and right.session_open:
+            if right.session_open:
                 try:
                     right.stop()
                 except Exception:  # noqa: BLE001
@@ -325,6 +239,145 @@ def _run(args, directory: Path, outcome: dict) -> bool:
             raise
         finally:
             right.close()
+
+
+# ----------------------------------------------------------------------------- reusable steps
+# (run_handoff --then-pour calls these with arms that stay enabled after the handoff)
+
+def pour_config(args) -> PourConfig:
+    kw = dict(theta_max_deg=args.theta_max, grasp_along_tool_mm=args.grasp_shift_mm, grasp_up_mm=args.grasp_up_mm,
+              grasp_along_pour_mm=args.grasp_pour_mm, lip_back_mm=args.lip_back_mm)
+    if getattr(args, "fast_plan", False):
+        # The combination that passed every real run so far first: ~40 IK queries instead of ~380.
+        kw.update(lip_heights_mm=(40.0, 35.0, 45.0, 50.0, 30.0, 60.0), pretilt_candidates_deg=(60.0, 50.0, 40.0))
+    return PourConfig(**kw)
+
+
+def locate_scene(client, top_path: Path, directory: Path, target: str, outcome: dict) -> tuple[Vessel, list[Vessel]]:
+    """Top frame -> GPU worker -> target beaker and obstacles (controller Z). Vision, no stored coordinates."""
+    reply = client.locate_top(str(top_path), str(directory / "locate"))
+    if not reply.get("ok"):
+        raise RuntimeError(f"顶视定位失败：{reply.get('error')}")
+    report = json.loads((directory / "locate" / "locate.json").read_text(encoding="utf-8"))
+    rack = report.get("rack") or {}
+    beaker, obstacles = scene_from_locate(reply["vessels"], target, rack_xy=rack.get("approx_xy"))
+    outcome["scene"] = {"beaker": beaker.to_dict(), "obstacles": [o.to_dict() for o in obstacles],
+                        "notes": reply.get("notes")}
+    print("目标烧杯（控制器坐标）：", json.dumps(beaker.to_dict(), ensure_ascii=False), flush=True)
+    return beaker, obstacles
+
+
+def plan_for_hold(right, sight, left_state, right_state, beaker, obstacles, pour_cfg, directory, outcome) -> PourPlan:
+    """Plan from the right arm's actual hold with controller IK queries (read-only)."""
+    from chem_demo.handoff_runtime import CachedIK
+    from chem_demo.run_handoff import _t_right_left
+
+    T = _t_right_left(sight)
+    cfg = HandoffConfig(body_model=True)
+    other = arm_capsules_in(np.asarray(T), left_state["joints"], left_state["pose"][3:], cfg, "left")
+    ik = CachedIK(right.plan, "right")
+    started = time.monotonic()
+    try:
+        plan = plan_pour(right_state["pose"][:3], right_state["pose"][3:], right_state["joints"], beaker, obstacles,
+                         ik, fk=right.forward, cfg=pour_cfg, arm_cfg=cfg, other_arm=other)
+    except PourInfeasible as error:
+        outcome["plan_rejected"] = error.rejected
+        raise
+    outcome["plan"] = {"lip_xyz": plan.lip_xyz, "lip_above_rim_mm": plan.lip_above_rim_mm,
+                       "theta_pre_deg": plan.theta_pre_deg, "theta_max_deg": plan.theta_max_deg,
+                       "yaw_deg": plan.yaw_deg, "min_clearance": plan.min_clearance, "samples": len(plan.steps),
+                       "ik_queries": ik.calls, "seconds": round(time.monotonic() - started, 1)}
+    (directory / "pour_plan.json").write_text(json.dumps(plan.to_dict(), ensure_ascii=False, indent=1), encoding="utf-8")
+    (directory / "pour_side.svg").write_text(side_view_svg(plan, right_state["pose"][:3], right_state["pose"][3:],
+                                                           beaker, obstacles), encoding="utf-8")
+    print("倒液规划（只读查询）可行：", json.dumps(outcome["plan"], ensure_ascii=False), flush=True)
+    return plan
+
+
+def execute_pour(right, sight, plan, beaker, *, until, dwell_s, jaw, jaw_change_limit, directory, outcome,
+                 front) -> bool:
+    """Run the planned pour on an arm whose session is already open (enabled)."""
+    import cv2
+
+    from chem_demo.run_handoff import _joint_speed
+    from chem_demo.run_neck_pick import _stop_key
+    from task_skills.chemistry.driver import _reply_status
+    from task_skills.run_cartesian_jog import _rotation_angle_deg
+
+    _joint_speed(right)
+    if _reply_status(right.rig.dashboard.CP(CP_RATIO)) != 0:
+        raise RuntimeError("CP 设置未被控制器确认")
+    forward = phases(plan, until)
+
+    def run_phase(name: str, steps: Sequence[Mapping[str, Any]]) -> None:
+        if _stop_key():
+            raise RuntimeError(f"空格：在 {name} 之前停止")
+        for s in steps:
+            right.move_joint(s["xyz"], s["rpy"], s["joints"])
+        last = steps[-1]
+        right.wait(last["xyz"], last["rpy"], last["joints"], _stop_key, timeout_s=30.0 + 3.0 * len(steps))
+        pose = right.read()["pose"]
+        err_p = max(abs(pose[i] - last["xyz"][i]) for i in range(3))
+        err_r = _rotation_angle_deg(pose[3:], last["rpy"])
+        if err_p > ARRIVAL_POSITION_TOL_MM or err_r > ARRIVAL_ORIENTATION_TOL_DEG:
+            raise RuntimeError(f"{name} 末点未到位（{err_p:.2f} mm, {err_r:.2f}°）")
+        now = int(right.gripper_position())
+        outcome.setdefault("phases", []).append({"phase": name, "measured": pose, "jaw": now,
+                                                 "time": datetime.now().isoformat(timespec="milliseconds")})
+        if abs(now - jaw) > jaw_change_limit:
+            raise RuntimeError(f"{name} 后右爪读数 {jaw}→{now}，可能滑瓶，停止")
+        print(f"{name} 完成，右爪 {now}", flush=True)
+
+    for name, steps in segments(forward, continuous=until is None):
+        run_phase(name, steps)
+        if name == "transit":
+            cv2.imwrite(str(directory / "top_side.png"), sight.top_frame())
+            front("side")
+        if name == "pretilt":
+            # Where the lip should be vs the beaker, drawn on the calibrated top camera.
+            try:
+                top = sight.top_frame()
+                cv2.imwrite(str(directory / "top_pretilt.png"), top)
+                cv2.imwrite(str(directory / "top_pretilt_overlay.png"), lip_overlay(top, plan.lip_xyz, beaker))
+            except Exception as error:  # noqa: BLE001 - a picture never blocks the return path
+                print(f"预倾顶视取帧失败：{error}", flush=True)
+    if until is None:
+        end = time.monotonic() + dwell_s   # the photos are taken inside the dwell
+        print(f"倾倒中，停留 {dwell_s:.1f} s", flush=True)
+        front("pour")
+        try:
+            cv2.imwrite(str(directory / "top_pour.png"), sight.top_frame())
+        except Exception as error:  # noqa: BLE001
+            print(f"倾倒顶视取帧失败：{error}", flush=True)
+        while time.monotonic() < end:
+            if _stop_key():
+                break
+            time.sleep(0.05)
+    elif until == "pretilt":
+        front("pretilt")
+    back = way_back(forward, plan.steps[0])
+    run_phase("return", back)
+    front("after")
+    outcome["status"] = "poured_and_back" if until is None else f"stopped_after_{until}_and_back"
+    return True
+
+
+def add_pour_arguments(parser, *, defaults_measured: bool = False) -> None:
+    """Pour options shared by run_pour and run_handoff --then-pour."""
+    parser.add_argument("--target", default="left_beaker")
+    parser.add_argument("--theta-max", type=float, default=120.0)
+    parser.add_argument("--dwell-s", type=float, default=8.0 if defaults_measured else DEFAULT_DWELL_S)
+    parser.add_argument("--jaw-change-limit", type=int, default=8)
+    parser.add_argument("--no-front", action="store_true", help="不用正面 C920 取帧")
+    # 2026-11-23: three handoffs measured (17.8,24.7,12.2), (17.6,26.6,18.3), (16.4,25.3,19.5) mm with
+    # chem_demo.grasp_offset; the last one put ~40 ml of water into the beaker.
+    m = MEASURED_GRASP_OFFSET_MM if defaults_measured else (0.0, 0.0, 0.0)
+    parser.add_argument("--grasp-shift-mm", type=float, default=m[0],
+                        help="瓶子在爪中比模型沿工具轴多出的距离（chem_demo.grasp_offset 测得）")
+    parser.add_argument("--grasp-up-mm", type=float, default=m[1], help="瓶子在爪中比模型高出的距离")
+    parser.add_argument("--grasp-pour-mm", type=float, default=m[2], help="瓶子在爪中比模型沿倾倒方向多出的距离")
+    parser.add_argument("--lip-back-mm", type=float, default=PourConfig.lip_back_mm,
+                        help="唇边目标点离杯轴往回收的距离（沿倾倒方向）")
 
 
 def main(argv=None) -> int:
@@ -335,19 +388,9 @@ def main(argv=None) -> int:
     parser.add_argument("--until", choices=("side", "pretilt"), default=None,
                         help="与 --live 一起用：到侧悬停（side）或预倾（pretilt）后原路返回，不出液")
     parser.add_argument("--path-clear", action="store_true", help="确认倒液区域没有规划之外的器材（--live 必须）")
-    parser.add_argument("--target", default="left_beaker")
-    parser.add_argument("--theta-max", type=float, default=120.0)
-    parser.add_argument("--dwell-s", type=float, default=DEFAULT_DWELL_S)
     parser.add_argument("--right-hold-window", type=int, nargs=2, default=(150, 210), metavar=("MIN", "MAX"),
                         help="右爪持瓶读数范围（11-23 实测 180）")
-    parser.add_argument("--jaw-change-limit", type=int, default=8)
-    parser.add_argument("--no-front", action="store_true", help="不用正面 C920 取帧")
-    parser.add_argument("--grasp-shift-mm", type=float, default=0.0,
-                        help="瓶子在爪中比模型沿工具轴多出的距离（由预倾顶视/正面测得）")
-    parser.add_argument("--grasp-up-mm", type=float, default=0.0, help="瓶子在爪中比模型高出的距离")
-    parser.add_argument("--grasp-pour-mm", type=float, default=0.0, help="瓶子在爪中比模型沿倾倒方向多出的距离")
-    parser.add_argument("--lip-back-mm", type=float, default=PourConfig.lip_back_mm,
-                        help="唇边目标点离杯轴往回收的距离（沿倾倒方向）")
+    add_pour_arguments(parser)
     parser.add_argument("--scene-image", type=Path, default=None,
                         help="用这张顶视图定位烧杯（如交接开始时两臂在拍照位拍的 01_top.png）；持瓶时瓶子会挡住目标烧杯")
     args = parser.parse_args(argv)

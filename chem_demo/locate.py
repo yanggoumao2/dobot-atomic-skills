@@ -36,6 +36,7 @@ PAN_Z = 339.73            # right base, fingertip touch on the right balance pan
 PLATFORM_X = (-520.0, 160.0)
 PLATFORM_Y = (-820.0, -220.0)
 CROP_SCALE = 3
+PAN_HEIGHT_TOLERANCE = 12.0  # free fits of the real pan beakers 2026-11-21..23: 77-82 good, 108/115 wrong
 PAN_BEAKER_HEIGHT = 81.0  # right pan beaker, free fit at 21:28 (rms 1.1 px); provisional until measured
 MID_Y = -531.0  # half way between the two bases (left base at y ≈ -1062 in the right-base frame)
 
@@ -192,9 +193,11 @@ def locate_scene(image: np.ndarray, camera: Camera, segmenter) -> dict:
         mask = cv2.morphologyEx(d.mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)))
         mask = _largest_component(mask) if mask.any() else d.mask
         params, rms, kept = fit_cylinder(camera, mask, base_z)
-        if support != "table" and (params[2] < 40 or rms > 2.5):
+        if support != "table" and (abs(params[2] - PAN_BEAKER_HEIGHT) > PAN_HEIGHT_TOLERANCE or rms > 2.5):
             # SAM sometimes keeps only the upper part of a beaker on the mirror-like pan, and the
-            # free fit then collapses (h 5 mm, 21:59). Refit with the pan-beaker height fixed.
+            # free fit then collapses (h 5 mm, 21:59). It also overshoots: h 108/115 mm on 2026-11-23
+            # (real 82), and a wrong height drags the axis XY along the view ray (27 mm), which a pour
+            # cannot afford. Refit with the pan-beaker height fixed.
             params, rms, kept = fit_cylinder(camera, mask, base_z, fixed_height=PAN_BEAKER_HEIGHT)
             report["notes"].append(f"{name}: 自由拟合失败，按固定杯高 {PAN_BEAKER_HEIGHT:.0f} mm 重拟合，只信 XY")
         vessel = Vessel(name, d.role, support, *(float(v) for v in params[:2]), base_z,

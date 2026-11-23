@@ -45,10 +45,10 @@ from task_skills.run_cartesian_jog import Jog, Limits
 from task_skills.chemistry.driver import LiveDriver
 
 HANDOFF_DATA = DATA.parent / "handoff"
-RIGHT_SPEED_PERCENT = 12
+RIGHT_SPEED_PERCENT = 16
 HOVER_Z_LIMIT = 500.0   # highest left TCP from which a held bottle is put straight back down
 HOVER_Z_RESET = 485.0   # commissioned neck hover height
-LEFT_SPEED_PERCENT = 12
+LEFT_SPEED_PERCENT = 16
 
 
 class SharedArm(NeckArm):
@@ -378,118 +378,11 @@ def _reset(args, directory, outcome):
         stack.callback(driver.close)
         left = SharedArm(profile, "left", LEFT_SPEED_PERCENT, driver)
         right = SharedArm(profile, "right", RIGHT_SPEED_PERCENT, driver)
-        right_jaw, left_jaw = right.gripper_position(), left.gripper_position()
-        outcome.update(left_jaw=left_jaw, right_jaw=right_jaw)
-        cycle_log = _latest_cycle_log()
-        window = tuple(getattr(args, "right_hold_window", (30, 240)))
-        return_route = None
-        if right_jaw < 250:
-            return_route = _left_return_target(cycle_log, states["left"], states["right"], right_jaw, left_jaw, window)
-        handback = None
-        right_plan_state = states["right"]
-        if right_jaw < 250:
-            handback = _handback_contact(cycle_log, states["right"], states["left"], right_jaw, left_jaw, window)
-            if handback is None and return_route is not None:
-                # The left will first retrace its exit onto the station; plan the hand-back from there.
-                station_state = {"pose": [*return_route[-1], *states["left"]["pose"][3:]], "joints": states["left"]["joints"]}
-                handback = _handback_contact(cycle_log, states["right"], station_state, right_jaw, left_jaw, window)
-            if handback is None:
-                raise RuntimeError(f"右爪未张开（读数 {right_jaw}），且不是上次交接后的状态，请人工处理")
-            # After the hand-back the right stands at its contact pose, empty.
-            right_plan_state = {"pose": [*handback["xyz"], *handback["rpy"]], "joints": states["right"]["joints"]}
-        right_path, corridor = None, None
-        if not near_photo("right", right_plan_state["pose"]):
-            try:
-                right_path = _right_retreat_path(cycle_log, right_plan_state)
-            except RuntimeError:
-                found = _right_corridor_back(cycle_log, right_plan_state)
-                if found is None:
-                    raise
-                corridor, standoff_state = found
-                right_path = _right_retreat_path(cycle_log, standoff_state)
-        pose = states["left"]["pose"] if return_route is None else [*return_route[-1], *states["left"]["pose"][3:]]
-        held = left_jaw < 250 or handback is not None
-        left_back = []
-        if held and cycle_log is not None:
-            legs = next((s["legs"] for s in cycle_log["steps"] if s["step"] == "left_route_checked"), None)
-            if legs and math.dist(pose[:3], legs[-1]) <= 5.0:
-                # Still at the handoff station: retrace the route that brought it there.
-                left_back = [list(leg) for leg in reversed(legs[:-1])]
-                pose = [*left_back[-1], *pose[3:]]
-        if held:
-            x, y, z = pose[:3]
-            if not (220 <= x <= 305 and -425 <= y <= -350):
-                raise RuntimeError(f"左爪夹着瓶子但不在原放瓶区上方（{x:.0f}, {y:.0f}），请人工放回")
-            if not float(neck["tcp_z"]) - 2 <= z <= HOVER_Z_LIMIT:
-                raise RuntimeError(f"左臂高度 {z:.0f} mm 不在可直接放回的范围")
-            if handback is None and not _gripper_confirms_hold(left_jaw, gripper):
-                raise RuntimeError(f"左爪读数 {left_jaw} 既不是张开也不是带瓶读数，请人工检查")
-        attempted = False
+        attempted = [False]
         try:
-            if _stop_key():
-                raise RuntimeError("已取消")
-            attempted = True
-            if handback is not None:
-                right.open_session(home=False)
-                left.open_session(home=False)
-                if return_route is not None:
-                    lhere = left.read()
-                    top = max(float(lhere["pose"][2]), return_route[-1][2]) + 15.0
-                    ljog = Jog(left, Limits(lhere["pose"][:3], 700.0, 350.0, top),
-                               record_path=Path("unused-handoff-reset.csv"), ask=lambda _p: "", out=print,
-                               stop_pressed=_stop_key)
-                    ljog.rpy = list(lhere["pose"][3:])
-                    ljog.run_route(return_route, ljog.check_route(return_route))
-                    outcome["left_returned_to_station"] = return_route
-                outcome["handed_back_left_jaw"] = _hand_back(right, left, handback, gripper, outcome)
-            if right_path is not None:
-                if not right.session_open:
-                    right.open_session(home=False)
-                _joint_speed(right)
-                if corridor is not None:
-                    _back_to_standoff(right, corridor, right_path[0]["joints"])
-                    outcome["right_corridor_back"] = [t["xyz"] for t in corridor]
-                _retreat_right(right, right_path)
-                outcome["right_retreated_waypoints"] = len(right_path)
-            if not left.session_open:
-                left.open_session(home=False)
-            here = left.read()
-            # Ceiling: the higher of where the left stands now (the 610 mm handoff station) and the photo pose.
-            ceiling = max(float(here["pose"][2]), photo_pose("left")[0][2]) + 15.0
-            jog = Jog(left, Limits(here["pose"][:3], 700.0, float(neck["tcp_z"]) - 5, ceiling),
-                      record_path=Path("unused-handoff-reset.csv"), ask=lambda _p: "", out=print,
-                      stop_pressed=_stop_key)
-            jog.rpy = list(here["pose"][3:])
-            if left_back:
-                jog.run_route(left_back, jog.check_route(left_back))
-                here = left.read()
-            if held:
-                down = [[here["pose"][0], here["pose"][1], float(neck["tcp_z"])]]
-                jog.run_route(down, jog.check_route(down))
-                opened = left.grip_to(int(gripper["open"]), int(gripper["speed"]))
-                outcome["left_open"] = opened
-                if opened["final"] < 250:
-                    raise RuntimeError(f"左爪未张开到位（读数 {opened['final']}），停止")
-                up = [[here["pose"][0], here["pose"][1], HOVER_Z_RESET]]
-                jog.run_route(up, jog.check_route(up))
-            target, _ = photo_pose("left")
-            jog.limits = Limits(jog.xyz, 700.0, float(neck["tcp_z"]) - 5, ceiling)
-            legs = [list(target)] if jog.xyz[2] >= HOVER_Z_RESET - 1 else [[*jog.xyz[:2], HOVER_Z_RESET], list(target)]
-            jog.run_route(legs, jog.check_route(legs))
-            if right_path is None and not near_photo("right", states["right"]["pose"]):
-                right.open_session(home=False)
-                rhere = right.read()
-                rjog = Jog(right, Limits(rhere["pose"][:3], 700.0, 300.0, 560.0),
-                           record_path=Path("unused-handoff-reset.csv"), ask=lambda _p: "", out=print,
-                           stop_pressed=_stop_key)
-                rjog.rpy = list(rhere["pose"][3:])
-                rtarget, _ = photo_pose("right")
-                rlegs = rjog.travel_legs(rtarget, max(rhere["pose"][2], rtarget[2]))
-                rjog.run_route(rlegs, rjog.check_route(rlegs))
-            outcome["bottle_put_back"] = held
-            return True
+            return _put_back(args, outcome, left, right, states, attempted)
         except BaseException:
-            if attempted:
+            if attempted[0]:
                 for arm in (left, right):
                     if arm.session_open:
                         try:
@@ -500,8 +393,140 @@ def _reset(args, directory, outcome):
         finally:
             for arm in (left, right):
                 arm.close()
-            if attempted:
+            if attempted[0]:
                 _verify_both_disabled(profile)
+
+
+def _ensure_open(arm):
+    if not arm.session_open:
+        arm.open_session(home=False)
+
+
+def _put_back(args, outcome, left, right, states, attempted):
+    """Hand the bottle back to the left if the right holds it, set it down where it was lifted, open the
+    left jaw, both arms to the photo pose. Works on disabled arms (--reset) and on arms still enabled
+    after the pour (--then-pour); ``attempted[0]`` turns True once the first motion is commanded."""
+    profile = _load_profile()
+    neck = profile["neck_grasp"]
+    gripper = neck["gripper"]
+    right_jaw, left_jaw = right.gripper_position(), left.gripper_position()
+    outcome.update(left_jaw=left_jaw, right_jaw=right_jaw)
+    cycle_log = _latest_cycle_log()
+    window = tuple(getattr(args, "right_hold_window", (30, 240)))
+    return_route = None
+    if right_jaw < 250:
+        return_route = _left_return_target(cycle_log, states["left"], states["right"], right_jaw, left_jaw, window)
+    handback = None
+    right_plan_state = states["right"]
+    if right_jaw < 250:
+        handback = _handback_contact(cycle_log, states["right"], states["left"], right_jaw, left_jaw, window)
+        if handback is None and return_route is not None:
+            # The left will first retrace its exit onto the station; plan the hand-back from there.
+            station_state = {"pose": [*return_route[-1], *states["left"]["pose"][3:]], "joints": states["left"]["joints"]}
+            handback = _handback_contact(cycle_log, states["right"], station_state, right_jaw, left_jaw, window)
+        if handback is None:
+            raise RuntimeError(f"右爪未张开（读数 {right_jaw}），且不是上次交接后的状态，请人工处理")
+        # After the hand-back the right stands at its contact pose, empty.
+        right_plan_state = {"pose": [*handback["xyz"], *handback["rpy"]], "joints": states["right"]["joints"]}
+    right_path, corridor = None, None
+    if not near_photo("right", right_plan_state["pose"]):
+        try:
+            right_path = _right_retreat_path(cycle_log, right_plan_state)
+        except RuntimeError:
+            found = _right_corridor_back(cycle_log, right_plan_state)
+            if found is None:
+                raise
+            corridor, standoff_state = found
+            right_path = _right_retreat_path(cycle_log, standoff_state)
+    pose = states["left"]["pose"] if return_route is None else [*return_route[-1], *states["left"]["pose"][3:]]
+    held = left_jaw < 250 or handback is not None
+    left_back = []
+    if held and cycle_log is not None:
+        legs = next((s["legs"] for s in cycle_log["steps"] if s["step"] == "left_route_checked"), None)
+        if legs and math.dist(pose[:3], legs[-1]) <= 5.0:
+            # Still at the handoff station: retrace the route that brought it there.
+            left_back = [list(leg) for leg in reversed(legs[:-1])]
+            pose = [*left_back[-1], *pose[3:]]
+    if held:
+        x, y, z = pose[:3]
+        if not (220 <= x <= 305 and -425 <= y <= -350):
+            raise RuntimeError(f"左爪夹着瓶子但不在原放瓶区上方（{x:.0f}, {y:.0f}），请人工放回")
+        if not float(neck["tcp_z"]) - 2 <= z <= HOVER_Z_LIMIT:
+            raise RuntimeError(f"左臂高度 {z:.0f} mm 不在可直接放回的范围")
+        if handback is None and not _gripper_confirms_hold(left_jaw, gripper):
+            raise RuntimeError(f"左爪读数 {left_jaw} 既不是张开也不是带瓶读数，请人工检查")
+    if _stop_key():
+        raise RuntimeError("已取消")
+    attempted[0] = True
+    if handback is not None:
+        _ensure_open(right)
+        _ensure_open(left)
+        if return_route is not None:
+            lhere = left.read()
+            top = max(float(lhere["pose"][2]), return_route[-1][2]) + 15.0
+            ljog = Jog(left, Limits(lhere["pose"][:3], 700.0, 350.0, top),
+                       record_path=Path("unused-handoff-reset.csv"), ask=lambda _p: "", out=print,
+                       stop_pressed=_stop_key)
+            ljog.rpy = list(lhere["pose"][3:])
+            ljog.run_route(return_route, ljog.check_route(return_route))
+            outcome["left_returned_to_station"] = return_route
+        outcome["handed_back_left_jaw"] = _hand_back(right, left, handback, gripper, outcome)
+    right_retreat = None
+    if right_path is not None:
+        _ensure_open(right)
+        _joint_speed(right)
+        if corridor is not None:
+            _back_to_standoff(right, corridor, right_path[0]["joints"])
+            outcome["right_corridor_back"] = [t["xyz"] for t in corridor]
+            _retreat_right(right, right_path)
+        else:
+            # Two arms at once: the right backs out along its approach in a thread; the left starts
+            # carrying the bottle down once the right's jaws are RIGHT_CLEAR_MM back from it.
+            from concurrent.futures import ThreadPoolExecutor
+            pool = ThreadPoolExecutor(max_workers=1)
+            released_at = right.read()["pose"][:3]
+            right_retreat = pool.submit(_retreat_right, right, right_path)
+            pool.shutdown(wait=False)
+            _wait_until_away(_load_profile()["arms"]["right"]["ip"], released_at, RIGHT_CLEAR_MM, right_retreat)
+        outcome["right_retreated_waypoints"] = len(right_path)
+    _ensure_open(left)
+    here = left.read()
+    # Ceiling: the higher of where the left stands now (the 610 mm handoff station) and the photo pose.
+    ceiling = max(float(here["pose"][2]), photo_pose("left")[0][2]) + 15.0
+    jog = Jog(left, Limits(here["pose"][:3], 700.0, float(neck["tcp_z"]) - 5, ceiling),
+              record_path=Path("unused-handoff-reset.csv"), ask=lambda _p: "", out=print,
+              stop_pressed=_stop_key)
+    jog.rpy = list(here["pose"][3:])
+    if left_back:
+        jog.run_route(left_back, jog.check_route(left_back))
+        here = left.read()
+    if held:
+        down = [[here["pose"][0], here["pose"][1], float(neck["tcp_z"])]]
+        jog.run_route(down, jog.check_route(down))
+        opened = left.grip_to(int(gripper["open"]), int(gripper["speed"]))
+        outcome["left_open"] = opened
+        if opened["final"] < 250:
+            raise RuntimeError(f"左爪未张开到位（读数 {opened['final']}），停止")
+        up = [[here["pose"][0], here["pose"][1], HOVER_Z_RESET]]
+        jog.run_route(up, jog.check_route(up))
+    target, _ = photo_pose("left")
+    jog.limits = Limits(jog.xyz, 700.0, float(neck["tcp_z"]) - 5, ceiling)
+    legs = [list(target)] if jog.xyz[2] >= HOVER_Z_RESET - 1 else [[*jog.xyz[:2], HOVER_Z_RESET], list(target)]
+    jog.run_route(legs, jog.check_route(legs))
+    if right_retreat is not None:
+        right_retreat.result()
+    if right_path is None and not near_photo("right", states["right"]["pose"]):
+        _ensure_open(right)
+        rhere = right.read()
+        rjog = Jog(right, Limits(rhere["pose"][:3], 700.0, 300.0, 560.0),
+                   record_path=Path("unused-handoff-reset.csv"), ask=lambda _p: "", out=print,
+                   stop_pressed=_stop_key)
+        rjog.rpy = list(rhere["pose"][3:])
+        rtarget, _ = photo_pose("right")
+        rlegs = rjog.travel_legs(rtarget, max(rhere["pose"][2], rtarget[2]))
+        rjog.run_route(rlegs, rjog.check_route(rlegs))
+    outcome["bottle_put_back"] = held
+    return True
 
 
 def _execute(args, directory, outcome):
@@ -544,8 +569,49 @@ def _execute(args, directory, outcome):
             return True
 
         from chem_demo.handoff_observer import RightWristObserver
-        observer = RightWristObserver(stack, sight.roles["right_wrist"], directory)
-        observer.expected_range_mm = STANDOFF_MM   # soft prior for picking the bottle mask
+
+        def make_observer():
+            made = RightWristObserver(stack, sight.roles["right_wrist"], directory)
+            made.expected_range_mm = STANDOFF_MM   # soft prior for picking the bottle mask
+            return made
+
+        pour_scene = None
+        if args.then_pour:
+            # One run: the GPU worker loads and the pour scene (target beaker) is located from a top
+            # frame taken NOW, with both arms at the photo pose, while the left arm picks the bottle.
+            # Vision every run: a moved beaker is found again; nothing is taught.
+            from concurrent.futures import ThreadPoolExecutor
+
+            from chem_demo.run_pour import locate_scene
+            pour_dir = directory / "pour"
+            pour_dir.mkdir(exist_ok=True)
+            scene_top = pour_dir / "top_scene.png"
+            cv2.imwrite(str(scene_top), sight.top_frame())
+            pour_out = outcome.setdefault("pour", {})
+
+            # ONE GPU worker, started now: it loads and locates the pour scene while the left picks,
+            # and is first needed for the hang check at the station. (Waiting for it right after the
+            # short lift halted the arm 51 s and, with two workers loading at once, 70 s.)
+            def load_and_locate():
+                from chem_demo.wrist_runtime import VisionClient
+                client = VisionClient()
+                return client, locate_scene(client, scene_top, pour_dir, args.target, pour_out)
+
+            pool = ThreadPoolExecutor(max_workers=1)
+            stack.callback(pool.shutdown, wait=True)
+            pour_scene = pool.submit(load_and_locate)
+
+            def close_worker():
+                try:
+                    pour_scene.result(timeout=300)[0].close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+            stack.callback(close_worker)
+            observer = RightWristObserver(stack, sight.roles["right_wrist"], directory, segment=False)
+            observer.expected_range_mm = STANDOFF_MM
+        else:
+            observer = make_observer()
         attempted = False
         try:
             if _stop_key():
@@ -571,12 +637,17 @@ def _execute(args, directory, outcome):
                     print(f"抬起后视觉无法判断，夹爪读数 {position} 与带瓶读数一致，按已夹住继续", flush=True)
                     picked = {**picked, "success": True, "held": True, "status": "held_by_gripper_feedback"}
                     outcome["pick_status"] = picked["status"]
-            sight.pause_streams()  # only the right wrist streams during the handoff
             if picked.get("success") is not True:
                 raise HandoffRefused(f"瓶子未确认被左爪夹住（{picked.get('status')}），不进行交接")
+            sight.pause_streams()  # only the right wrist streams during the handoff
+
+            def attach_worker():
+                if pour_scene is not None and observer.client is None:
+                    observer.client = pour_scene.result()[0]
 
             def verify_hold(left_state):
                 """Top frame at the station -> GPU worker fits the hanging bottle (held_bottle_top)."""
+                attach_worker()
                 image = sight.top_frame()
                 stem = directory / "hang_top"
                 path = stem.with_suffix(".png")
@@ -608,9 +679,14 @@ def _execute(args, directory, outcome):
                 print("已按 --until-hang 在顶视实测后停止：左爪仍夹瓶停在交接站，右臂未动。"
                       f"叠加图 {directory / 'hang_top_fit.png'}；放回用 --reset --path-clear", flush=True)
                 return True
-            if result.get("success") is True:
-                _exit_left(left, print)
-            return result.get("success") is True
+            if result.get("success") is not True:
+                return False
+            if args.then_pour:
+                pour_beaker, pour_obstacles = pour_scene.result()[1]
+                return _pour_now(args, profile, left, right, sight, pour_beaker, pour_obstacles, pour_dir, pour_out,
+                                 left_photo_state=states["left"])
+            _exit_left(left, print)
+            return True
         except BaseException:
             if attempted:
                 for arm in (left, right):
@@ -625,6 +701,81 @@ def _execute(args, directory, outcome):
                 arm.close()
             if attempted:
                 _verify_both_disabled(profile)
+
+
+LEFT_CLEAR_MM = 120.0   # the left has moved this far from the released bottle before the right lifts it
+RIGHT_CLEAR_MM = 150.0  # the right jaws have backed this far from the handed-back bottle before the left moves it
+
+
+def _wait_until_away(ip, start_xyz, distance_mm, done, timeout_s=90.0):
+    """Poll the passive 30004 feed (the moving arm's own socket belongs to its thread)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if done.done():
+            done.result()   # re-raise a failure of the other arm
+            return
+        if _stop_key():
+            raise RuntimeError("操作员停止")
+        pose = read_passive_robot_state(ip)["pose"]
+        if math.dist(pose[:3], start_xyz) >= distance_mm:
+            return
+        time.sleep(0.05)
+    raise RuntimeError(f"等待另一只手臂离开 {distance_mm:.0f} mm 超时")
+
+
+def _pour_now(args, profile, left, right, sight, beaker, obstacles, directory, outcome, *, left_photo_state):
+    """Right arm pours right after the handoff; both arms stay enabled (same session).
+
+    Two arms at once: the left backs away to the photo pose in a thread; the right plans meanwhile and
+    starts lifting once the left is LEFT_CLEAR_MM away from the released bottle (it then only moves
+    further away, toward its photo pose; the pour itself was planned against the left AT the photo pose).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from chem_demo.cameras import grab_c920
+    from chem_demo.run_pour import check_hold, plan_for_hold, pour_config
+
+    right_state, released_at = right.read(), left.read()["pose"]
+    jaw = int(right.gripper_position())
+    problems = check_hold(right_state, jaw, args.pour_hold_window)
+    if problems:
+        raise RuntimeError("；".join(problems))
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        left_exit = pool.submit(_exit_left, left, print)
+        outcome["start"] = {"left_released_at": released_at, "right": right_state["pose"],
+                            "right_joints": right_state["joints"], "right_jaw": jaw}
+        plan = plan_for_hold(right, sight, left_photo_state, right_state, beaker, obstacles, pour_config(args),
+                             directory, outcome)
+        _wait_until_away(profile["arms"]["left"]["ip"], released_at[:3], LEFT_CLEAR_MM, left_exit)
+        poured = _pour_execute(args, right, sight, plan, beaker, jaw, directory, outcome, grab_c920)
+        left_exit.result()   # the left is at the photo pose before anything else moves
+    finally:
+        pool.shutdown(wait=True)
+    if not poured or args.no_put_back:
+        return poured
+    # Still enabled: hand the bottle back to the left, set it down where it was lifted, both to photo.
+    states = {"left": left.read(), "right": right.read()}
+    back = outcome.setdefault("put_back", {})
+    print("倒液完成，交回左爪并放回原处", flush=True)
+    return _put_back(args, back, left, right, states, [True])
+
+
+def _pour_execute(args, right, sight, plan, beaker, jaw, directory, outcome, grab_c920):
+    from chem_demo.run_pour import execute_pour
+
+    def front(name):
+        if args.no_front:
+            return
+        try:
+            cv2.imwrite(str(directory / f"front_{name}.png"), grab_c920())
+        except Exception as error:  # noqa: BLE001 - the observer camera never blocks the run
+            print(f"正面相机取帧失败（{name}）：{error}", flush=True)
+
+    poured = execute_pour(right, sight, plan, beaker, until=None, dwell_s=args.dwell_s, jaw=jaw,
+                          jaw_change_limit=args.jaw_change_limit, directory=directory, outcome=outcome, front=front)
+    outcome["success"] = poured
+    return poured
 
 
 def main(argv=None):
@@ -645,7 +796,19 @@ def main(argv=None):
     parser.add_argument("--wide-search", action="store_true", help="更大的交接点/接近方位搜索（更慢）")
     parser.add_argument("--right-hold-window", type=int, nargs=2, default=(30, 240), metavar=("MIN", "MAX"),
                         help="右爪夹住瓶身后允许的夹爪读数范围（首次现场实测后收紧）")
+    parser.add_argument("--then-pour", action="store_true",
+                        help="与 --live 一起用：交接成功后不下使能，接着右臂把瓶中液体倒进左天平烧杯（顶视识别烧杯）")
+    parser.add_argument("--record", action="store_true",
+                        help="与 --live 一起用：全程录正面 C920，结束后合成“左原始画面/右视觉识别”对比视频")
+    parser.add_argument("--no-put-back", action="store_true", help="与 --then-pour 一起用：倒完不把瓶子放回")
+    parser.add_argument("--pour-hold-window", type=int, nargs=2, default=(150, 210), metavar=("MIN", "MAX"),
+                        help="倒液前右爪持瓶读数范围")
+    from chem_demo.run_pour import add_pour_arguments
+    add_pour_arguments(parser, defaults_measured=True)
     args = parser.parse_args(argv)
+    args.fast_plan = True
+    if args.then_pour and (not args.live or args.until_hang):
+        parser.error("--then-pour 只能和 --live 一起用（不能和 --until-hang 一起）")
     if args.until_hang and not args.live:
         parser.error("--until-hang 只能和 --live 一起用")
     if args.search and not args.preflight:
@@ -659,15 +822,66 @@ def main(argv=None):
     print(f"左右臂交接 | 记录：{directory}", flush=True)
     if args.live:
         print("运行时按住空格停止。空瓶、工作区净空、两只手边都有急停。", flush=True)
+    recorder = None
+    if args.record and args.live:
+        args.no_front = True   # the recorder owns the C920
+        recorder = _start_recording(directory)
+        result["recording"] = {"file": str(recorder[1]), "start_ms": recorder[2]}
     try:
         passed = (_reset if args.reset else _execute)(args, directory, result)
     except (Exception, KeyboardInterrupt) as exc:
         result["error"] = str(exc) or type(exc).__name__
         print(f"已停止：{result['error']}", flush=True)
         passed = False
+    finally:
+        if recorder is not None:
+            _stop_recording(recorder[0])
     result.update(success=passed, elapsed_s=round(time.perf_counter() - started, 3))
-    (directory / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    (directory / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str),
+                                           encoding="utf-8")
+    if recorder is not None:
+        _build_video(directory, recorder[1], recorder[2])
     return 0 if passed else 1
+
+
+# C920 opens ~1.5 s after ffmpeg starts (dshow); the recording's t=0 is taken as that moment.
+RECORDER_OPEN_DELAY_MS = 1500
+
+
+def _start_recording(directory):
+    import shutil
+    import subprocess
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("找不到 ffmpeg，无法录像")
+    out = directory / "c920.mkv"
+    start_ms = time.time() * 1000.0 + RECORDER_OPEN_DELAY_MS
+    process = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "dshow", "-rtbufsize", "200M",
+                                "-video_size", "1280x720", "-framerate", "30", "-i", "video=HD Pro Webcam C920",
+                                "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-y", str(out)],
+                               stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"正面相机录像中：{out}", flush=True)
+    return process, out, start_ms
+
+
+def _stop_recording(process):
+    try:
+        process.communicate(b"q", timeout=20)   # ffmpeg finishes the file cleanly on "q"
+    except Exception:  # noqa: BLE001
+        process.kill()
+
+
+def _build_video(directory, video, start_ms):
+    import subprocess
+    from chem_demo.wrist_runtime import PERCEPTION_PYTHON
+    out = directory / "demo_side_by_side.mp4"
+    try:
+        subprocess.run([str(PERCEPTION_PYTHON), "-X", "utf8", "-m", "chem_demo.make_demo_video", str(directory),
+                        "--video", str(video), "--start-ms", str(start_ms), "--out", str(out)],
+                       check=True, timeout=900, cwd=str(Path(__file__).resolve().parents[1]))
+        print(f"对比视频：{out}", flush=True)
+    except Exception as error:  # noqa: BLE001 - the run itself is already recorded
+        print(f"对比视频合成失败：{error}", flush=True)
 
 
 if __name__ == "__main__":
