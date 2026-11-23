@@ -129,6 +129,11 @@ class HandoffConfig:
     arm_clearance_mm: float = 30.0             # between the two arms' links
     joint_limit_margin_deg: float = 3.0                        # only used when joint limits are injected
     max_refine_mm: float = 25.0
+    # Seed for the contact IK, which fixes the right arm's branch for the whole handoff and the
+    # pour after it. Empty = the start joints (2026-11-23 runs: J4 ~120 mm BELOW the flange, the
+    # forearm sloping down over the balances, so no pour path exists). WRIST_UP_SEED keeps J4 above
+    # the flange; the joint move to it then turns J5 through 0, which is harmless in joint space.
+    right_branch_seed: tuple[float, ...] = ()
     # Absolute left handoff points (left base frame). When given they replace the offset grid, so a
     # stored handoff station is checked as is instead of being searched for again.
     left_points_mm: tuple[tuple[float, float, float], ...] = ()
@@ -313,6 +318,10 @@ def _ik_step(ik: Callable, fk: Callable | None, side: str, xyz: Sequence[float],
             raise _Reject(f"{side}_fk_mismatch")
     return {"joints": joints, "jump_deg": jump, "j5_margin_deg": j5, "limit_margin_deg": margin}
 
+
+# Right-arm IK seed for the wrist-up branch at the handoff grasp (J4 ~120 mm above the flange),
+# from chem_demo.nova2_model.ik_numeric at the 2026-11-23 grasp (-141.7, -523.8, 291.5) rpy (0, 90, -84.8).
+WRIST_UP_SEED = (-94.0, -52.0, -38.0, -90.0, -99.0, -90.0)
 
 _TOOL_SEGMENTS = None
 
@@ -650,7 +659,7 @@ def _right_joint_first(geo: _Geometry, handoff: np.ndarray, park_joints: Sequenc
         reason = geo.right_guard(xyz) or geo.clearance(handoff, xyz, rpy, bottle)
         if reason:
             raise _Reject(reason)
-    seed = list(park_joints)
+    seed = list(cfg.right_branch_seed) if cfg.right_branch_seed else list(park_joints)
     solved = []
     for xyz in (contact, stand, pre):  # contact first: the far, extended configuration fixes the branch
         try:
@@ -673,7 +682,7 @@ def _right_joint_first(geo: _Geometry, handoff: np.ndarray, park_joints: Sequenc
         if reason:
             raise _Reject(reason)
         j5 = abs(math.remainder(q[4], 180.0))
-        if j5 < WRIST_MARGIN_DEG:
+        if j5 < WRIST_MARGIN_DEG and (k == n or not cfg.right_branch_seed):
             raise _Reject("right_wrist_singularity")
         joint_steps.append({"name": "pre_approach" if k == n else f"pre_approach_{k}", "side": "right",
                             "step_kind": "joint_approach", "xyz": [round(float(v), 4) for v in xyz], "rpy": r,

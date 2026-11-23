@@ -79,3 +79,80 @@ def capsules(joints_deg: Sequence[float], tool_rpy: Sequence[float] | None = Non
         caps += [(f + z * s, f + z * e, r, name) for s, e, r, name in tool_segments]
     return caps
 
+
+# ----------------------------------------------------------------------------- full pose FK / numeric IK
+# J6 turns about -Y through the flange at the zero configuration; TOOL_AT_ZERO is the Tool0 orientation
+# there. Fitted 2026-11-23 against 3148 controller InverseSolution samples (preflight plans of the
+# handoff runs): position <= 0.3 mm, orientation <= 0.07 deg. Offline only: the live runtime still
+# asks the controller for every IK.
+_J6_AXIS = np.array([0.0, -1.0, 0.0])
+TOOL_AT_ZERO = np.array([[-1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, -1.0, 0.0]])
+
+
+def _rotm(axis: np.ndarray, angle_deg: float) -> np.ndarray:
+    a = math.radians(angle_deg)
+    k = axis / np.linalg.norm(axis)
+    K = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+    return np.eye(3) + math.sin(a) * K + (1.0 - math.cos(a)) * (K @ K)
+
+
+def flange_matrix(joints_deg: Sequence[float]) -> np.ndarray:
+    """Tool0 orientation (3x3) in the base frame."""
+    R = np.eye(3)
+    for i, (axis, _) in enumerate(_AXES):
+        R = R @ _rotm(axis, float(joints_deg[i]))
+    return R @ _rotm(_J6_AXIS, float(joints_deg[5])) @ TOOL_AT_ZERO
+
+
+def fk_pose(joints_deg: Sequence[float]) -> dict[str, list[float]]:
+    """Tool0 pose {"xyz", "rpy"} (controller RPY = Rz@Ry@Rx, degrees)."""
+    from task_skills.chemistry.geometry import matrix_to_euler_zyx
+    xyz = link_points(joints_deg)["flange"]
+    return {"xyz": [float(v) for v in xyz],
+            "rpy": [float(v) for v in matrix_to_euler_zyx(flange_matrix(joints_deg).tolist())]}
+
+
+def _log_rotation(R: np.ndarray) -> np.ndarray:
+    """Rotation vector (radians) of R; correct up to 180 deg (the skew part alone vanishes there)."""
+    cos = max(-1.0, min(1.0, (float(np.trace(R)) - 1.0) / 2.0))
+    angle = math.acos(cos)
+    w = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
+    if angle < 1e-6:
+        return 0.5 * w
+    if math.pi - angle < 1e-3:
+        axis = np.sqrt(np.maximum((np.diag(R) + 1.0) / 2.0, 0.0))
+        i = int(np.argmax(axis))
+        axis = (R[:, i] + np.eye(3)[:, i]) / 2.0
+        axis = axis / np.linalg.norm(axis)
+        return axis * angle
+    return w * (angle / (2.0 * math.sin(angle)))
+
+
+def ik_numeric(xyz: Sequence[float], rpy: Sequence[float], seed: Sequence[float], *,
+               iterations: int = 200, tol_mm: float = 0.01, tol_deg: float = 0.005) -> list[float]:
+    """Damped least-squares IK from ``seed`` (stays on the seed's branch). Raises RuntimeError."""
+    from task_skills.chemistry.geometry import euler_zyx_to_matrix
+    target_p = np.asarray(xyz, float)
+    target_R = np.array(euler_zyx_to_matrix([float(v) for v in rpy]), float)
+    q = np.array([float(v) for v in seed], float)
+
+    def error(qq: np.ndarray) -> np.ndarray:
+        p = link_points(qq)["flange"]
+        R = flange_matrix(qq)
+        return np.concatenate([target_p - p, np.degrees(_log_rotation(target_R @ R.T)) * 2.0])  # ~2 mm per degree
+
+    for _ in range(iterations):
+        e = error(q)
+        if np.linalg.norm(e[:3]) < tol_mm and np.linalg.norm(e[3:]) / 2.0 < tol_deg:
+            R = flange_matrix(q)
+            if float(np.trace(target_R.T @ R)) < 3.0 - 1e-6:  # independent check: not 180 deg off
+                raise RuntimeError("ik_numeric converged to a wrong orientation")
+            return [float(v) for v in q]
+        J = np.zeros((6, 6))
+        for j in range(6):
+            dq = np.zeros(6)
+            dq[j] = 1e-3
+            J[:, j] = (e - error(q + dq)) / 1e-3
+        step = J.T @ np.linalg.solve(J @ J.T + 1e-4 * np.eye(6), e)
+        q = q + np.clip(step, -10.0, 10.0)
+    raise RuntimeError("ik_numeric did not converge")

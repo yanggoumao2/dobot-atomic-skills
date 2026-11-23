@@ -14,8 +14,8 @@ from typing import Any, Callable, Mapping, Sequence
 import numpy as np
 
 from chem_demo.stations import photo_pose
-from chem_demo.handoff_plan import (BottleHold, HandoffConfig, HandoffInfeasible, _Reject, _ik_step, _rot,
-                                    plan_handoff)
+from chem_demo.handoff_plan import (WRIST_UP_SEED, BottleHold, HandoffConfig, HandoffInfeasible, _Reject, _ik_step,
+                                    _rot, plan_handoff)
 
 MAX_TOTAL_REFINE_MM = 40.0   # cap on the tool-X/Y shift from the standoff pose (alignment + down-check)
 # Pads this far short of the bottle axis when the joint move ends. 100 mm until 2026-11-22: with the
@@ -72,6 +72,8 @@ def handoff_config(left_pose: Sequence[float], *, wide: bool = False) -> Handoff
         # The jaw axis is tool Y and the bottle stands upright: tool Y must be horizontal, tool X vertical.
         roll_candidates_deg=(90.0,),   # +90: tool X down, so the wrist camera looks at the bottle from above the axis
         standoff_candidates_mm=(STANDOFF_MM,),
+        # 2026-11-23: the pour after the handoff needs the right J4 above the flange (chem_demo.pour_plan).
+        right_branch_seed=WRIST_UP_SEED,
     )
 
 
