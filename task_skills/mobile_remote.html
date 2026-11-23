@@ -1,0 +1,1768 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#17252a">
+  <title>Nova2｜手机控制面板</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17252a;
+      --soft: #34484e;
+      --muted: #718087;
+      --paper: #eff3f0;
+      --white: #fff;
+      --line: #dce5e0;
+      --green: #147657;
+      --mint: #61d4ab;
+      --green-pale: #e8f7ef;
+      --orange: #ee7545;
+      --orange-pale: #fff0e8;
+      --red: #b83e38;
+      --red-pale: #fff0ee;
+      --shadow: 0 14px 34px rgba(23, 37, 42, .065);
+      font-family: Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-width: 320px;
+      min-height: 100vh;
+      margin: 0;
+      background:
+        radial-gradient(ellipse at 88% 3%, rgba(97, 212, 171, .13), transparent 28rem),
+        var(--paper);
+      color: var(--ink);
+    }
+    button, input { font: inherit; }
+    button { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, input:focus-visible, [tabindex="0"]:focus-visible {
+      outline: 3px solid rgba(20, 118, 87, .42);
+      outline-offset: 3px;
+    }
+    [hidden] { display: none !important; }
+    .shell {
+      width: min(100% - 30px, 1020px);
+      margin: 0 auto;
+      padding: max(16px, env(safe-area-inset-top)) 0 max(28px, env(safe-area-inset-bottom));
+    }
+    .masthead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 5px 2px 20px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .brand-mark {
+      display: grid;
+      width: 40px;
+      height: 40px;
+      flex: 0 0 auto;
+      place-items: center;
+      border-radius: 12px;
+      background: var(--ink);
+      color: var(--mint);
+      font-size: 13px;
+      font-weight: 900;
+      letter-spacing: -.06em;
+      box-shadow: 0 7px 16px rgba(23, 37, 42, .15);
+    }
+    .brand-name { display: block; font-size: 12px; font-weight: 900; letter-spacing: .12em; }
+    .brand-caption { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .15em; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 30px;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .75);
+      color: var(--soft);
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .pill::before { width: 7px; height: 7px; border-radius: 50%; background: #9daaa5; content: ""; }
+    .pill.secure::before, .pill.live::before, .pill.ready::before { background: var(--green); }
+    .pill.insecure { color: #a84624; }
+    .pill.insecure::before, .pill.busy::before { background: var(--orange); }
+    .pill.live, .pill.ready { border-color: #bde5d1; background: var(--green-pale); color: var(--green); }
+    .pill.busy { border-color: #f0d2bf; background: var(--orange-pale); color: #a84624; }
+    .pill.fault { border-color: #edc3be; background: var(--red-pale); color: var(--red); }
+    .pill.fault::before { background: var(--red); }
+
+    .hero {
+      position: relative;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 22px;
+      overflow: hidden;
+      min-height: 178px;
+      padding: clamp(22px, 4vw, 34px);
+      border-radius: 24px;
+      background: linear-gradient(112deg, rgba(97, 212, 171, .09), transparent 56%), var(--ink);
+      color: #fff;
+      box-shadow: 0 20px 42px rgba(23, 37, 42, .16);
+    }
+    .hero::after {
+      position: absolute;
+      top: -95px;
+      right: 15%;
+      width: 270px;
+      height: 270px;
+      border: 1px solid rgba(97, 212, 171, .15);
+      border-radius: 50%;
+      box-shadow: 0 0 0 30px rgba(97, 212, 171, .035), 0 0 0 65px rgba(97, 212, 171, .025);
+      content: "";
+      pointer-events: none;
+    }
+    .hero-copy, .hero-status { position: relative; z-index: 1; }
+    .eyebrow {
+      margin: 0 0 8px;
+      color: #92b7aa;
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    .hero h1 { margin: 0; font-size: clamp(27px, 5vw, 39px); font-weight: 850; letter-spacing: -.06em; line-height: 1.08; }
+    .hero-copy > p:last-child { max-width: 480px; margin: 10px 0 0; color: #bdcac6; font-size: 12px; line-height: 1.65; }
+    .hero-status {
+      min-width: 190px;
+      padding: 13px 15px;
+      border: 1px solid rgba(255, 255, 255, .13);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, .055);
+      backdrop-filter: blur(10px);
+    }
+    .hero-status-label { display: block; margin-bottom: 7px; color: #94aaa5; font-size: 9px; font-weight: 850; letter-spacing: .12em; }
+    .hero-status-line { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 850; }
+    .led { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: #7b8985; }
+    .led.online { background: var(--mint); box-shadow: 0 0 12px rgba(97, 212, 171, .5); }
+    .hero-status small { display: block; margin-top: 6px; color: #a6b8b2; font-size: 10px; }
+
+    .panel {
+      border: 1px solid rgba(216, 226, 221, .95);
+      border-radius: 19px;
+      background: var(--white);
+      box-shadow: var(--shadow);
+    }
+    .pair-panel { margin-top: 14px; padding: clamp(17px, 3vw, 23px); }
+    .pair-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, .88fr); align-items: end; gap: 22px; }
+    .section-kicker { display: block; margin-bottom: 5px; color: var(--muted); font-size: 9px; font-weight: 900; letter-spacing: .15em; text-transform: uppercase; }
+    .section-title { margin: 0; font-size: 17px; font-weight: 850; letter-spacing: -.04em; }
+    .section-copy { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+    .code-label { display: block; margin-bottom: 7px; color: var(--soft); font-size: 11px; font-weight: 800; }
+    .code-row { display: flex; gap: 8px; }
+    .code-input {
+      width: 100%;
+      min-width: 0;
+      height: 48px;
+      padding: 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #f8faf8;
+      color: var(--ink);
+      font-size: 20px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 850;
+      letter-spacing: .22em;
+    }
+    .code-input::placeholder { color: #b6c1bc; }
+    .pair-help { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .paired {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      min-height: 51px;
+      padding: 10px 13px;
+      border: 1px solid #bfe6d3;
+      border-radius: 12px;
+      background: #f3fbf6;
+    }
+    .paired-icon {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      flex: 0 0 auto;
+      place-items: center;
+      border-radius: 50%;
+      background: #dff4e9;
+      color: var(--green);
+      font-weight: 900;
+    }
+    .paired strong { display: block; font-size: 11px; }
+    .paired small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 46px;
+      padding: 0 16px;
+      border: 0;
+      border-radius: 11px;
+      background: var(--ink);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 850;
+      cursor: pointer;
+      touch-action: manipulation;
+      user-select: none;
+      transition: background .14s ease, transform .14s ease, opacity .14s ease;
+    }
+    .button:hover:not(:disabled) { background: #2a4148; }
+    .button:active:not(:disabled) { transform: translateY(1px) scale(.99); }
+    .button:disabled { cursor: not-allowed; opacity: .42; }
+    .button-green { background: var(--green); }
+    .button-green:hover:not(:disabled) { background: #0f6348; }
+    .button-red { background: var(--red); }
+    .button-red:hover:not(:disabled) { background: #a4322e; }
+    .button-block { width: 100%; }
+    .button-short { min-height: 42px; flex: 0 0 auto; }
+    .button-quiet { min-height: 38px; background: transparent; color: var(--soft); }
+    .button-quiet:hover:not(:disabled) { background: #f1f5f2; color: var(--ink); }
+    .notice {
+      display: none;
+      margin: 13px 0 0;
+      padding: 10px 12px;
+      border-left: 3px solid #bfcac5;
+      border-radius: 5px 10px 10px 5px;
+      background: #f6f8f6;
+      color: var(--soft);
+      font-size: 10px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+    .notice.visible { display: block; }
+    .notice.error { border-left-color: var(--red); background: var(--red-pale); color: #8f342e; }
+    .notice.success { border-left-color: var(--green); background: var(--green-pale); color: #14583f; }
+
+    .content-grid { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(285px, .92fr); gap: 14px; margin-top: 14px; }
+    .control-panel, .feedback-panel { padding: clamp(17px, 3vw, 23px); }
+    .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 15px; }
+    .panel-head .section-copy { max-width: 450px; }
+    .arm-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: #f4f7f5; }
+    .arm-choice {
+      min-height: 43px;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 850;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .arm-choice[aria-pressed="true"] { border-color: #d0ddd7; background: #fff; color: var(--ink); box-shadow: 0 3px 8px rgba(23, 37, 42, .06); }
+    .arm-choice:disabled { cursor: not-allowed; opacity: .52; }
+    .arm-choice span { margin-right: 6px; color: var(--green); font-size: 9px; }
+    .arm-hint { display: flex; align-items: flex-start; gap: 9px; min-height: 48px; margin: 12px 0; padding: 10px; border-radius: 11px; background: #edf3f4; color: var(--soft); font-size: 10px; line-height: 1.5; }
+    .arm-hint b { display: block; margin-bottom: 2px; color: var(--ink); font-size: 11px; }
+    .hint-dot { display: grid; width: 24px; height: 24px; flex: 0 0 auto; place-items: center; border-radius: 7px; background: #dcebed; color: #426d76; font-weight: 900; }
+
+    .feedback-panel { display: flex; flex-direction: column; }
+    .mode-row { display: flex; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+    .mode-row span:first-child { color: var(--muted); font-size: 10px; font-weight: 700; }
+    .mode-row span:last-child { color: var(--soft); font-size: 10px; font-weight: 850; text-align: right; }
+    .pose-box { padding: 14px; border-radius: 14px; background: linear-gradient(135deg, rgba(97, 212, 171, .07), transparent 68%), #f5f8f6; }
+    .pose-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 11px; }
+    .pose-head strong { font-size: 11px; }
+    .pose-head span { color: var(--muted); font-size: 9px; }
+    .pose-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+    .pose-cell { min-width: 0; padding: 10px 8px; border: 1px solid #e5ece8; border-radius: 10px; background: rgba(255, 255, 255, .86); }
+    .pose-cell small { display: block; margin-bottom: 5px; color: var(--muted); font-size: 8px; font-weight: 900; letter-spacing: .13em; }
+    .pose-cell strong { display: block; overflow: hidden; font-size: clamp(14px, 2vw, 18px); font-variant-numeric: tabular-nums; font-weight: 850; letter-spacing: -.04em; text-overflow: ellipsis; white-space: nowrap; }
+    .pose-cell em { margin-left: 3px; color: var(--muted); font-size: 8px; font-style: normal; font-weight: 700; }
+    .sync-copy { min-height: 14px; margin: 9px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
+    .state-message { display: none; margin-top: 10px; padding: 9px 10px; border-radius: 9px; background: #f4f7f5; color: var(--soft); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+    .state-message.visible { display: block; }
+
+    .joystick-panel { margin-top: 14px; padding: clamp(17px, 3vw, 23px); }
+    .analog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 15px; }
+    .analog-head .section-copy { max-width: 490px; }
+    .analog-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(112px, .34fr); gap: 14px; }
+    .pad-frame, .z-frame { position: relative; overflow: hidden; min-width: 0; border: 1px solid #dfe8e3; border-radius: 16px; background: #f6f9f7; }
+    .pad-frame { display: grid; min-height: 276px; place-items: center; padding: 17px; }
+    .xy-pad {
+      position: relative;
+      width: min(100%, 270px);
+      aspect-ratio: 1;
+      overflow: hidden;
+      border: 1px solid #cfddd6;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle, rgba(255,255,255,.95) 0 25%, transparent 25.5%),
+        radial-gradient(circle, transparent 0 49%, rgba(195, 213, 204, .42) 49.5% 50%, transparent 50.5%),
+        linear-gradient(0deg, transparent calc(50% - .5px), rgba(164, 185, 175, .6) calc(50% - .5px), rgba(164, 185, 175, .6) calc(50% + .5px), transparent calc(50% + .5px)),
+        linear-gradient(90deg, transparent calc(50% - .5px), rgba(164, 185, 175, .6) calc(50% - .5px), rgba(164, 185, 175, .6) calc(50% + .5px), transparent calc(50% + .5px)),
+        radial-gradient(circle at 50% 42%, #fff, #eaf1ed 77%);
+      box-shadow: inset 0 2px 12px rgba(23, 37, 42, .045), 0 5px 14px rgba(23, 37, 42, .06);
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .xy-pad.locked, .z-track.locked { opacity: .56; }
+    .pad-label { position: absolute; z-index: 1; color: #788982; font-size: 9px; font-weight: 900; letter-spacing: .1em; pointer-events: none; user-select: none; }
+    .pad-label.top { top: 9%; left: 50%; transform: translateX(-50%); }
+    .pad-label.bottom { bottom: 9%; left: 50%; transform: translateX(-50%); }
+    .pad-label.left { top: 50%; left: 8%; transform: translateY(-50%); }
+    .pad-label.right { top: 50%; right: 8%; transform: translateY(-50%); }
+    .pad-center { position: absolute; top: 50%; left: 50%; width: 7px; height: 7px; border: 2px solid #a6b8ae; border-radius: 50%; background: #fff; transform: translate(-50%, -50%); pointer-events: none; }
+    .joystick-knob {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      display: grid;
+      width: 58px;
+      height: 58px;
+      place-items: center;
+      border: 3px solid rgba(255, 255, 255, .92);
+      border-radius: 50%;
+      background: var(--ink);
+      color: var(--mint);
+      box-shadow: 0 5px 15px rgba(23, 37, 42, .24);
+      font-size: 8px;
+      font-weight: 900;
+      letter-spacing: .09em;
+      transform: translate(calc(-50% + var(--knob-x, 0px)), calc(-50% + var(--knob-y, 0px)));
+      transition: box-shadow .12s ease;
+      pointer-events: none;
+    }
+    .joystick-knob.active { box-shadow: 0 0 0 7px rgba(20, 118, 87, .12), 0 5px 15px rgba(23, 37, 42, .22); }
+    .z-frame { display: flex; min-height: 276px; flex-direction: column; align-items: center; justify-content: space-between; padding: 14px 10px; }
+    .z-label { color: var(--muted); font-size: 9px; font-weight: 900; letter-spacing: .12em; }
+    .z-label b { display: block; margin-top: 4px; color: var(--ink); font-size: 12px; letter-spacing: 0; }
+    .z-track {
+      position: relative;
+      width: 56px;
+      min-height: 176px;
+      flex: 1;
+      margin: 12px 0;
+      border: 1px solid #cfddd6;
+      border-radius: 999px;
+      background:
+        linear-gradient(90deg, transparent calc(50% - .5px), #c8d8d0 calc(50% - .5px), #c8d8d0 calc(50% + .5px), transparent calc(50% + .5px)),
+        linear-gradient(90deg, #edf3ef, #fff 50%, #edf3ef);
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .z-center { position: absolute; top: 50%; left: 50%; width: 8px; height: 8px; border: 2px solid #a6b8ae; border-radius: 50%; background: white; transform: translate(-50%, -50%); pointer-events: none; }
+    .z-knob {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 40px;
+      height: 40px;
+      border: 3px solid #fff;
+      border-radius: 50%;
+      background: #287b62;
+      box-shadow: 0 4px 11px rgba(23, 37, 42, .2);
+      transform: translate(-50%, calc(-50% + var(--z-knob-y, 0px)));
+      pointer-events: none;
+    }
+    .analog-caption { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+    .contact-state { color: var(--soft); font-weight: 800; text-align: right; }
+    .contact-state.lost { color: var(--red); }
+    .lock-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(175px, .44fr); gap: 10px; margin-top: 14px; }
+    .motion-lock {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      min-height: 48px;
+      padding: 10px 11px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #f6f8f6;
+    }
+    .lock-dot { width: 8px; height: 8px; flex: 0 0 auto; margin-top: 4px; border-radius: 50%; background: #a6b2ad; }
+    .motion-lock.ready { border-color: #bce5d2; background: #f2fbf6; }
+    .motion-lock.ready .lock-dot { background: var(--green); }
+    .motion-lock.busy .lock-dot { background: var(--orange); }
+    .motion-lock.fault .lock-dot { background: var(--red); }
+    .motion-lock strong { display: block; font-size: 10px; }
+    .motion-lock small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; line-height: 1.4; }
+    .stop-square { width: 10px; height: 10px; border: 1.5px solid currentColor; border-radius: 2px; }
+    details.tap-panel { margin-top: 14px; border: 1px solid #e1e9e4; border-radius: 13px; background: #fbfcfb; }
+    .tap-panel summary { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 14px; color: var(--ink); font-size: 11px; font-weight: 850; cursor: pointer; list-style: none; }
+    .tap-panel summary::-webkit-details-marker { display: none; }
+    .tap-panel summary::after { color: var(--green); content: "+"; font-size: 17px; }
+    .tap-panel[open] summary::after { content: "−"; }
+    .tap-content { padding: 0 13px 14px; }
+    .step-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 2px 0 10px; }
+    .step-head small { color: var(--muted); font-size: 9px; }
+    .step-selector { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: #f5f8f6; }
+    .step-choice { min-width: 45px; min-height: 32px; padding: 0 7px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 9px; font-weight: 850; cursor: pointer; touch-action: manipulation; }
+    .step-choice[aria-pressed="true"] { background: var(--ink); color: #fff; }
+    .axis-list { display: grid; gap: 7px; }
+    .axis-row { display: grid; grid-template-columns: 58px 1fr 1fr; align-items: center; gap: 7px; min-height: 51px; padding: 5px; border: 1px solid #e7ede9; border-radius: 10px; background: #fff; }
+    .axis-name { display: flex; align-items: center; gap: 7px; padding-left: 4px; color: var(--ink); font-size: 10px; font-weight: 900; }
+    .axis-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--orange); transform: rotate(45deg); }
+    .axis-row:nth-child(2) .axis-dot { background: #438b9d; }
+    .axis-row:nth-child(3) .axis-dot { background: var(--green); }
+    .move-button { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 39px; border: 1px solid #dbe4df; border-radius: 8px; background: #fff; color: var(--soft); font-size: 11px; font-weight: 850; cursor: pointer; touch-action: manipulation; user-select: none; transition: background .12s ease, opacity .12s ease; }
+    .move-button:hover:not(:disabled) { border-color: #9ccbb7; background: #f1faf5; }
+    .move-button:disabled { cursor: not-allowed; opacity: .38; }
+    .move-symbol { color: var(--green); font-size: 14px; }
+    .safety-note { margin: 11px 0 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
+    .safety-note strong { color: var(--soft); }
+    .page-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 15px; padding: 0 3px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+    .footer-mark { color: #98a6a0; font-weight: 900; letter-spacing: .11em; }
+
+    .scrim { position: fixed; z-index: 10; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(14, 25, 29, .66); backdrop-filter: blur(5px); }
+    .dialog { width: min(100%, 420px); padding: 23px; border: 1px solid rgba(255, 255, 255, .4); border-radius: 21px; background: #fff; box-shadow: 0 28px 70px rgba(0, 0, 0, .25); }
+    .dialog-mark { display: grid; width: 39px; height: 39px; margin-bottom: 13px; place-items: center; border-radius: 12px; background: var(--orange-pale); color: #a84624; font-size: 17px; font-weight: 900; }
+    .dialog h2 { margin: 0 0 8px; font-size: 19px; letter-spacing: -.04em; }
+    .dialog p { margin: 0 0 14px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+    .dialog-note { padding: 10px 11px; border-radius: 10px; background: #f3f6f4; color: var(--soft); font-size: 10px; }
+    .dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 16px; }
+
+    @media (max-width: 720px) {
+      .shell { width: min(100% - 22px, 560px); }
+      .masthead { padding-bottom: 14px; }
+      .hero { min-height: 0; align-items: stretch; flex-direction: column; gap: 16px; border-radius: 20px; }
+      .hero-status { width: 100%; min-width: 0; }
+      .hero::after { top: -140px; right: -75px; }
+      .pair-grid, .content-grid { grid-template-columns: 1fr; }
+      .pair-grid { gap: 12px; }
+      .content-grid { gap: 11px; margin-top: 11px; }
+      .panel, .pair-panel, .control-panel, .feedback-panel, .joystick-panel { border-radius: 16px; }
+      .joystick-panel { margin-top: 11px; }
+      .analog-grid { grid-template-columns: minmax(0, 1fr) 100px; gap: 9px; }
+      .pad-frame, .z-frame { min-height: 245px; }
+      .xy-pad { width: min(100%, 240px); }
+      .z-track { min-height: 156px; }
+      .lock-row { grid-template-columns: 1fr; }
+      .button-red { min-height: 52px; }
+      .page-footer { align-items: flex-start; flex-direction: column; gap: 3px; }
+    }
+    @media (max-width: 390px) {
+      .shell { width: min(100% - 18px, 560px); }
+      .analog-grid { grid-template-columns: minmax(0, 1fr) 82px; gap: 7px; }
+      .pad-frame, .z-frame { min-height: 218px; }
+      .xy-pad { width: min(100%, 205px); }
+      .joystick-knob { width: 52px; height: 52px; }
+      .z-track { width: 49px; min-height: 138px; }
+      .z-knob { width: 37px; height: 37px; }
+      .pad-label { font-size: 8px; }
+      .axis-row { grid-template-columns: 52px 1fr 1fr; gap: 5px; }
+      .axis-name { gap: 5px; padding-left: 2px; }
+      .move-button { gap: 5px; font-size: 10px; }
+      .pose-cell { padding: 9px 6px; }
+      .pose-cell strong { font-size: 14px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+    }
+    .active-meta { display: none; }
+    .active-meta strong { color: var(--ink); font-size: 12px; font-weight: 900; }
+    .active-meta span { color: var(--muted); font-size: 9px; font-weight: 800; }
+    #activePhaseLabel { margin-left: auto; padding: 5px 8px; border-radius: 999px; background: #f0f4f1; color: var(--soft); }
+    body.control-active main { display: flex; flex-direction: column; }
+    body.control-active .hero { display: none; }
+    body.control-active .pair-panel { order: 0; margin-top: 2px; padding: 8px 10px; border-radius: 12px; }
+    body.control-active .pair-grid { display: block; }
+    body.control-active .pair-grid > div:first-child { display: none; }
+    body.control-active .paired { min-height: 0; padding: 6px 8px; border: 0; background: transparent; }
+    body.control-active .paired-icon { width: 23px; height: 23px; }
+    body.control-active .paired small { display: none; }
+    body.control-active .notice { margin-top: 6px; padding: 6px 8px; font-size: 9px; }
+    body.control-active .joystick-panel { order: 1; margin-top: 9px; padding: 12px; border-radius: 15px; }
+    body.control-active .active-meta { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #e7ede9; }
+    body.control-active .analog-head { margin-bottom: 8px; }
+    body.control-active .analog-head .section-copy { margin-top: 4px; }
+    body.control-active .content-grid { order: 4; grid-template-columns: 1fr; margin-top: 9px; }
+    body.control-active .control-panel { display: none; }
+    body.control-active .feedback-panel { padding: 13px; }
+    body.control-active .feedback-panel .panel-head { margin-bottom: 8px; }
+    body.control-active .feedback-panel .mode-row,
+    body.control-active .feedback-panel #phaseBadge,
+    body.control-active .safety-note { display: none; }
+    body.control-active .pose-box { padding: 10px; }
+    body.control-active .analog-caption { margin-top: 6px; }
+    body.control-active .lock-row { margin-top: 9px; }
+    body.control-active .motion-lock { min-height: 42px; padding: 8px 9px; }
+    body.control-active .button-red { min-height: 46px; }
+    body.control-active details.tap-panel { margin-top: 9px; }
+    body.control-active .tap-panel summary { min-height: 42px; }
+    .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: #f5f8f6; margin-top: 10px; }
+    .seg button { min-height: 40px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 800; cursor: pointer; touch-action: manipulation; }
+    .seg button small { display: block; font-size: 10px; font-weight: 600; opacity: .8; }
+    .seg button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+    .seg button:disabled { opacity: .45; cursor: not-allowed; }
+    .view-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: auto auto auto; gap: 6px; margin-top: 10px; }
+    .view-grid button { min-height: 52px; border: 1px solid var(--line); border-radius: 10px; background: #f5f8f6; color: var(--ink); font-size: 14px; font-weight: 800; cursor: pointer; touch-action: manipulation; }
+    .view-grid button small { display: block; font-size: 10px; font-weight: 600; color: var(--muted); }
+    .view-grid button[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .view-grid button[aria-pressed="true"] small { color: #d6e2dc; }
+    .view-grid .v-front { grid-column: 2; grid-row: 1; }
+    .view-grid .v-left { grid-column: 1; grid-row: 2; }
+    .view-grid .v-right { grid-column: 3; grid-row: 2; }
+    .view-grid .v-back { grid-column: 2; grid-row: 3; }
+    .view-grid .robot { grid-column: 2; grid-row: 2; display: grid; place-items: center; border-radius: 10px; background: #e7efe9; color: var(--muted); font-size: 11px; font-weight: 800; text-align: center; min-height: 52px; }
+    .sub-label { margin-top: 14px; font-size: 12px; font-weight: 800; color: var(--muted); }
+    .calib-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 10px; font-size: 12px; color: var(--muted); }
+    .calib-row b { color: var(--ink); }
+    .quick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+    .quick-grid .button { min-height: 52px; }
+    .small-button { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+    .small-button:disabled, .quick-grid .button:disabled { opacity: .45; cursor: not-allowed; }
+    .extra-panel { margin-top: 14px; padding: clamp(17px, 3vw, 23px); }
+    body.control-active .extra-panel { order: 3; margin-top: 9px; }
+    body.control-active .quick-panel { order: 2; }
+    .speed-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-top: 14px; }
+    .speed-row .sub-label { margin-top: 0; }
+    .speed-row b { font-size: 18px; color: var(--ink); white-space: nowrap; }
+    .speed-slider { width: 100%; height: 36px; margin-top: 6px; accent-color: var(--ink); touch-action: pan-y; }
+    .speed-scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+    .quick-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <div class="brand" aria-label="Nova2 手机控制面板">
+        <div class="brand-mark" aria-hidden="true">N2</div>
+        <div>
+          <span class="brand-name">NOVA2 远程控制</span>
+        </div>
+      </div>
+      <span id="secureBadge" class="pill">检查连线</span>
+      <span id="connectionPill" class="pill">尚未配对</span>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="pageTitle">
+        <div class="hero-copy">
+          <h1 id="pageTitle">手机控制面板</h1>
+          <p>拇指拖曳可比例控制 XY 平面与 Z 高度；也可展开点按单步。放开即解除拖曳控制。</p>
+        </div>
+        <div class="hero-status">
+          <span class="hero-status-label">控制器连线 / Session</span>
+          <div class="hero-status-line"><span id="connectionLed" class="led" aria-hidden="true"></span><span id="connectionText">尚未配对</span></div>
+          <small id="connectionDetail">配对后开始读取状态</small>
+        </div>
+      </section>
+
+      <section class="panel pair-panel" aria-labelledby="pairTitle">
+        <div class="pair-grid">
+          <div>
+            <h2 id="pairTitle" class="section-title">连结桌面端</h2>
+            <p class="section-copy">输入桌面端显示的 8 位配对码，建立目前分页的操作工作阶段。</p>
+          </div>
+          <div>
+            <form id="pairForm" autocomplete="off">
+              <label class="code-label" for="pairCode">桌面配对码</label>
+              <div class="code-row">
+                <input id="pairCode" class="code-input" name="code" type="text" inputmode="numeric"
+                  autocomplete="one-time-code" pattern="[0-9]{8}" maxlength="8" minlength="8"
+                  placeholder="00000000" required aria-describedby="pairHelp">
+                <button id="pairButton" class="button button-green button-short" type="submit" disabled>配对</button>
+              </div>
+              <p id="pairHelp" class="pair-help">凭证只保存在目前分页的 sessionStorage。</p>
+            </form>
+            <div id="pairedPanel" class="paired" hidden>
+              <span class="paired-icon" aria-hidden="true">✓</span>
+              <div><strong>已与桌面端配对</strong><small>工作阶段凭证保存在目前分页。</small></div>
+            </div>
+          </div>
+        </div>
+        <p id="notice" class="notice visible" role="status" aria-live="polite">请使用桌面端提供的 HTTPS 位址开启此页，再输入配对码。</p>
+      </section>
+
+      <div class="content-grid">
+        <section class="panel control-panel" aria-labelledby="armTitle">
+          <div class="panel-head">
+            <div>
+              <h2 id="armTitle" class="section-title">选择机械臂</h2>
+              <p class="section-copy">实机会话需再次确认，才能取得所选机械臂的控制权。</p>
+            </div>
+            <span id="liveBadge" class="pill">等待状态</span>
+          </div>
+          <div id="armChoices" class="arm-choices" role="group" aria-label="选择机械臂">
+            <button class="arm-choice" type="button" data-arm="left" aria-pressed="true"><span>01</span>左臂</button>
+            <button class="arm-choice" type="button" data-arm="right" aria-pressed="false"><span>02</span>右臂</button>
+          </div>
+          <div class="arm-hint">
+            <span class="hint-dot" aria-hidden="true">i</span>
+            <div><b id="armSummaryTitle">尚未启用</b><span id="armSummaryText">配对并读取控制器状态后，才能确认启用所选机械臂。</span></div>
+          </div>
+          <button id="openButton" class="button button-block" type="button" disabled>确认启用左臂</button>
+        </section>
+
+        <section class="panel feedback-panel" aria-labelledby="feedbackTitle">
+          <div class="panel-head">
+            <div>
+              <h2 id="feedbackTitle" class="section-title">最近回报</h2>
+              <p class="section-copy">显示最近一次状态回应中的 TCP 位置。</p>
+            </div>
+            <span id="phaseBadge" class="pill">尚无状态</span>
+          </div>
+          <div class="mode-row"><span>控制器模式</span><span id="modeValue">—</span></div>
+          <div class="pose-box">
+            <div class="pose-head"><strong>TCP 位置</strong><span>Base frame · mm</span></div>
+            <div class="pose-grid" aria-label="最近回报的 TCP XYZ 座标">
+              <div class="pose-cell"><small>X</small><strong><span id="poseX">—</span><em>mm</em></strong></div>
+              <div class="pose-cell"><small>Y</small><strong><span id="poseY">—</span><em>mm</em></strong></div>
+              <div class="pose-cell"><small>Z</small><strong><span id="poseZ">—</span><em>mm</em></strong></div>
+            </div>
+            <p id="syncCopy" class="sync-copy">尚未收到控制器状态。</p>
+          </div>
+          <p id="stateMessage" class="state-message" aria-live="polite"></p>
+        </section>
+      </div>
+
+      <section class="panel extra-panel" aria-labelledby="viewTitle">
+        <div class="panel-head">
+          <div>
+            <h2 id="viewTitle" class="section-title">站位与速度</h2>
+            <p class="section-copy">你站在整台机器人的哪一边。摇杆「向前」= 远离你，左右按你自己的左右。</p>
+          </div>
+          <span id="viewBadge" class="pill">站在前面</span>
+        </div>
+        <div class="view-grid" role="group" aria-label="我站在机器人的哪一侧（俯视，机器人朝上）">
+          <button class="v-front view-choice" type="button" data-view="front" aria-pressed="true">前</button>
+          <button class="v-left view-choice" type="button" data-view="left" aria-pressed="false">左</button>
+          <div class="robot" aria-hidden="true">▲<br>机器人</div>
+          <button class="v-right view-choice" type="button" data-view="right" aria-pressed="false">右</button>
+          <button class="v-back view-choice" type="button" data-view="back" aria-pressed="false">后</button>
+        </div>
+        <div class="speed-row">
+          <span class="sub-label">移动速度（摇杆推满时；复位和拍摄位也按比例）</span>
+          <b id="speedValue">30 mm/s</b>
+        </div>
+        <input id="speedSlider" class="speed-slider" type="range" min="5" max="150" step="5" value="30" aria-label="移动速度 mm/s">
+        <div class="speed-scale"><span>5</span><span>慢 ← → 快</span><span>150</span></div>
+        <div class="calib-row">
+          <span>方向不对时用 · <b id="frontText">左臂前方 = 基座 −Y</b></span>
+          <button id="rotateFront" class="small-button" type="button">转 90°</button>
+        </div>
+      </section>
+
+      <section class="panel extra-panel quick-panel" aria-labelledby="quickTitle">
+        <div class="panel-head">
+          <div>
+            <h2 id="quickTitle" class="section-title">快捷动作</h2>
+            <p class="section-copy">复位和拍摄位是关节运动，整条路径请先目视确认无遮挡；随时可点「停止并释放」。</p>
+          </div>
+          <span id="gripperBadge" class="pill">夹爪 —</span>
+        </div>
+        <div class="quick-grid">
+          <button id="homeButton" class="button" type="button" disabled>复位</button>
+          <button id="cameraButton" class="button" type="button" disabled>到拍摄位</button>
+          <button id="gripOpenButton" class="button" type="button" disabled>张开夹爪</button>
+          <button id="gripCloseButton" class="button" type="button" disabled>闭合夹爪</button>
+        </div>
+        <div class="quick-foot">
+          <span id="recoverText">急停、掉电或报警后：自动上电、清除错误并重新使能所选机械臂</span>
+          <button id="recoverButton" class="small-button" type="button" disabled>上电 / 清错并使能</button>
+        </div>
+      </section>
+
+      <section class="panel joystick-panel" aria-labelledby="driveTitle">
+        <div id="activeMeta" class="active-meta">
+          <strong id="activeArmLabel">未启用</strong>
+          <span id="activeModeLabel">RobotMode —</span>
+          <span id="activePhaseLabel">尚无状态</span>
+        </div>
+        <div class="analog-head">
+          <div>
+            <h2 id="driveTitle" class="section-title">拇指拖曳</h2>
+            <p class="section-copy">圆盘控制前后左右（以你的站位为准），右侧轨道控制上下。偏移越大越快；松开即停。</p>
+          </div>
+          <span id="driveBadge" class="pill">移动已锁定</span>
+        </div>
+        <div class="analog-grid" aria-label="连续 XYZ 拖曳控制">
+          <div class="pad-frame">
+            <div id="xyPad" class="xy-pad locked" tabindex="0" role="application" aria-label="按住并拖曳控制 X 与 Y；放开即停止">
+              <span class="pad-label top">前 · 远离我</span>
+              <span class="pad-label bottom">后 · 靠近我</span>
+              <span class="pad-label left">左</span>
+              <span class="pad-label right">右</span>
+              <span class="pad-center" aria-hidden="true"></span>
+              <span id="xyKnob" class="joystick-knob" aria-hidden="true">DRAG</span>
+            </div>
+          </div>
+          <div class="z-frame">
+            <div class="z-label">Z HEIGHT<b>上 / 下</b></div>
+            <div id="zTrack" class="z-track locked" tabindex="0" role="application" aria-label="按住并上下拖曳控制 Z；放开即停止">
+              <span class="z-center" aria-hidden="true"></span>
+              <span id="zKnob" class="z-knob" aria-hidden="true"></span>
+            </div>
+            <div class="z-label">CENTRE<b>弹簧回中</b></div>
+          </div>
+        </div>
+        <div class="analog-caption">
+          <span>仅在指标保持撷取且页面位於前景时传送控制样本。</span>
+          <span id="contactState" class="contact-state">等待配对与启用</span>
+        </div>
+        <div class="lock-row">
+          <div id="motionLock" class="motion-lock" role="status" aria-live="polite">
+            <span class="lock-dot" aria-hidden="true"></span>
+            <div><strong id="lockTitle">移动已锁定</strong><small id="lockDetail">先完成配对并确认启用。</small></div>
+          </div>
+          <button id="stopButton" class="button button-red button-block" type="button" disabled><span class="stop-square" aria-hidden="true"></span><span id="stopLabel">停止并释放</span></button>
+        </div>
+
+        <details class="tap-panel">
+          <summary>点按单步微调 <span>按你的站位 · 有限距离</span></summary>
+          <div class="tap-content">
+            <div class="step-head">
+              <small>点按一次只送出一个步进</small>
+              <div class="step-selector" role="group" aria-label="每次步进距离">
+                <button class="step-choice" type="button" data-step="0.5" aria-pressed="false">0.5 mm</button>
+                <button class="step-choice" type="button" data-step="1" aria-pressed="true">1 mm</button>
+                <button class="step-choice" type="button" data-step="5" aria-pressed="false">5 mm</button>
+              </div>
+            </div>
+            <div class="axis-list">
+              <div class="axis-row">
+                <div class="axis-name"><span class="axis-dot" aria-hidden="true"></span>左右</div>
+                <button class="move-button" type="button" data-axis="X" data-direction="-1" aria-label="向左移动"><span class="move-symbol" aria-hidden="true">←</span><span>左</span></button>
+                <button class="move-button" type="button" data-axis="X" data-direction="1" aria-label="向右移动"><span>右</span><span class="move-symbol" aria-hidden="true">→</span></button>
+              </div>
+              <div class="axis-row">
+                <div class="axis-name"><span class="axis-dot" aria-hidden="true"></span>前后</div>
+                <button class="move-button" type="button" data-axis="Y" data-direction="-1" aria-label="向后（靠近我）移动"><span class="move-symbol" aria-hidden="true">↓</span><span>后</span></button>
+                <button class="move-button" type="button" data-axis="Y" data-direction="1" aria-label="向前（远离我）移动"><span>前</span><span class="move-symbol" aria-hidden="true">↑</span></button>
+              </div>
+              <div class="axis-row">
+                <div class="axis-name"><span class="axis-dot" aria-hidden="true"></span>上下</div>
+                <button class="move-button" type="button" data-axis="Z" data-direction="-1" aria-label="向下移动"><span class="move-symbol" aria-hidden="true">−</span><span>下</span></button>
+                <button class="move-button" type="button" data-axis="Z" data-direction="1" aria-label="向上移动"><span>上</span><span class="move-symbol" aria-hidden="true">+</span></button>
+              </div>
+            </div>
+          </div>
+        </details>
+        <p class="safety-note"><strong>安全提示：</strong>若桌面键盘示教仍在执行，请先在桌面端按 q 退出，再从手机确认启用。离开页面、失去指标撷取或连线逾时会解除目前拖曳；需重新按下才能开始新手势。</p>
+      </section>
+
+      <footer class="page-footer"><span>控制器状态约每秒更新；TCP 显示最近一次回报。</span></footer>
+    </main>
+  </div>
+
+  <div id="openDialog" class="scrim" role="presentation" hidden>
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmCopy">
+      <div class="dialog-mark" aria-hidden="true">!</div>
+      <h2 id="confirmTitle">确认启用机械臂？</h2>
+      <p id="confirmCopy">此操作会在实机工作阶段中启用所选机械臂并取得控制权。请确认周围安全，且桌面键盘示教已退出。</p>
+      <div class="dialog-note">将启用：<strong id="confirmArm">左臂</strong>。如需中止，随时点按「停止并释放」。</div>
+      <div class="dialog-actions">
+        <button id="cancelOpen" class="button button-quiet" type="button">返回</button>
+        <button id="confirmOpen" class="button button-green" type="button">确认启用</button>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const TOKEN_KEY = "nova2_remote_token";
+      const DRIVE_PERIOD_MS = 90;
+      const CONTACT_TIMEOUT_MS = 420;
+      const DEAD_ZONE = 0.055;
+      const phases = {
+        idle: "待命",
+        opening: "启用中",
+        ready: "就绪",
+        moving: "移动中",
+        driving: "拖曳中",
+        settling: "稳定中",
+        stopping: "停止中",
+        fault: "故障"
+      };
+      const modes = {
+        1: "初始化", 2: "安全锁定", 3: "未上电", 4: "未使能",
+        5: "已使能空闲", 6: "拖动", 7: "运行中", 8: "轨迹记录",
+        9: "警报", 10: "暂停", 11: "点动"
+      };
+      const el = {
+        secureBadge: document.getElementById("secureBadge"),
+        connectionLed: document.getElementById("connectionLed"),
+        connectionText: document.getElementById("connectionText"),
+        connectionDetail: document.getElementById("connectionDetail"),
+        connectionPill: document.getElementById("connectionPill"),
+        pairForm: document.getElementById("pairForm"),
+        pairCode: document.getElementById("pairCode"),
+        pairButton: document.getElementById("pairButton"),
+        pairedPanel: document.getElementById("pairedPanel"),
+        notice: document.getElementById("notice"),
+        liveBadge: document.getElementById("liveBadge"),
+        armChoices: Array.from(document.querySelectorAll(".arm-choice")),
+        armSummaryTitle: document.getElementById("armSummaryTitle"),
+        armSummaryText: document.getElementById("armSummaryText"),
+        openButton: document.getElementById("openButton"),
+        phaseBadge: document.getElementById("phaseBadge"),
+        modeValue: document.getElementById("modeValue"),
+        activeArmLabel: document.getElementById("activeArmLabel"),
+        activeModeLabel: document.getElementById("activeModeLabel"),
+        activePhaseLabel: document.getElementById("activePhaseLabel"),
+        poseX: document.getElementById("poseX"),
+        poseY: document.getElementById("poseY"),
+        poseZ: document.getElementById("poseZ"),
+        syncCopy: document.getElementById("syncCopy"),
+        stateMessage: document.getElementById("stateMessage"),
+        driveBadge: document.getElementById("driveBadge"),
+        xyPad: document.getElementById("xyPad"),
+        xyKnob: document.getElementById("xyKnob"),
+        zTrack: document.getElementById("zTrack"),
+        zKnob: document.getElementById("zKnob"),
+        contactState: document.getElementById("contactState"),
+        motionLock: document.getElementById("motionLock"),
+        lockTitle: document.getElementById("lockTitle"),
+        lockDetail: document.getElementById("lockDetail"),
+        stopButton: document.getElementById("stopButton"),
+        stopLabel: document.getElementById("stopLabel"),
+        stepChoices: Array.from(document.querySelectorAll(".step-choice")),
+        moveButtons: Array.from(document.querySelectorAll(".move-button")),
+        openDialog: document.getElementById("openDialog"),
+        confirmArm: document.getElementById("confirmArm"),
+        cancelOpen: document.getElementById("cancelOpen"),
+        confirmOpen: document.getElementById("confirmOpen"),
+        viewChoices: Array.from(document.querySelectorAll(".view-choice")),
+        speedSlider: document.getElementById("speedSlider"),
+        speedValue: document.getElementById("speedValue"),
+        viewBadge: document.getElementById("viewBadge"),
+        frontText: document.getElementById("frontText"),
+        rotateFront: document.getElementById("rotateFront"),
+        gripperBadge: document.getElementById("gripperBadge"),
+        homeButton: document.getElementById("homeButton"),
+        cameraButton: document.getElementById("cameraButton"),
+        gripOpenButton: document.getElementById("gripOpenButton"),
+        gripCloseButton: document.getElementById("gripCloseButton"),
+        recoverButton: document.getElementById("recoverButton")
+
+      };
+      const VIEW_NAMES = { front: "前面", left: "左边", back: "后面", right: "右边" };
+      const AXIS_OF_DEG = { 0: "+X", 90: "+Y", 180: "−X", 270: "−Y" };
+      let settingsPending = false;
+      let speedDragging = false;
+
+      let token = null;
+      let state = null;
+      let selectedArm = "left";
+      let stepSize = 1;
+      let requestSequence = 0;
+      let lastAppliedSequence = -1;
+      let lastAppliedRevision = -1;
+      let heartbeatAt = 0;
+      let serverClock = null;
+      let clientClock = null;
+      let pairing = false;
+      let opening = false;
+      let stepping = false;
+      let stopPending = 0;
+      let releasePending = 0;
+      let operationEpoch = 0;
+      let highestDriveSeq = Math.trunc(Date.now() * 1000);
+      let gesture = null;
+      let driveInFlight = false;
+      let driveTimer = 0;
+      let lostContact = false;
+      let noticeKind = "info";
+
+      try { token = sessionStorage.getItem(TOKEN_KEY); } catch (_) { token = null; }
+
+      function secureTransport() {
+        const host = window.location.hostname.toLowerCase();
+        return window.location.protocol === "https:" ||
+          host === "localhost" || host === "127.0.0.1" || host === "::1";
+      }
+
+      function phaseName(phase) { return phases[phase] || (phase ? String(phase) : "尚无状态"); }
+      function armName(arm) { return arm === "left" ? "左臂" : arm === "right" ? "右臂" : "未选择"; }
+      function finite(value) { return Number.isFinite(Number(value)); }
+      function asText(value, fallback) { return value === null || value === undefined || value === "" ? fallback : String(value); }
+      function motionClockReady() { return Number.isFinite(serverClock) && Number.isFinite(clientClock); }
+
+      function issuedAt(perfTime) {
+        if (!motionClockReady()) return null;
+        return serverClock + (perfTime - clientClock) / 1000;
+      }
+
+      function eventPerformanceTime(event) {
+        if (!event || !Number.isFinite(Number(event.timeStamp))) return null;
+        let stamp = Number(event.timeStamp);
+        if (stamp > 1e12 && Number.isFinite(performance.timeOrigin)) stamp -= performance.timeOrigin;
+        const age = performance.now() - stamp;
+        if (!Number.isFinite(stamp) || age > 400 || age < -150) return null;
+        return stamp;
+      }
+
+      function issuedForEvent(event) {
+        const stamp = eventPerformanceTime(event);
+        return stamp === null ? null : issuedAt(stamp);
+      }
+
+      function showNotice(message, kind) {
+        el.notice.textContent = message;
+        el.notice.className = "notice visible" + (kind ? " " + kind : "");
+        noticeKind = kind || "info";
+      }
+
+      function showStateMessage(message) {
+        const visible = typeof message === "string" && message.length > 0;
+        el.stateMessage.textContent = visible ? message : "";
+        el.stateMessage.className = "state-message" + (visible ? " visible" : "");
+      }
+
+      function setToken(value) {
+        token = value;
+        if (token) {
+          try { sessionStorage.setItem(TOKEN_KEY, token); }
+          catch (_) {
+            token = null;
+            showNotice("无法在目前分页保存工作阶段凭证，请允许使用 sessionStorage 后重新配对。", "error");
+          }
+        } else {
+          try { sessionStorage.removeItem(TOKEN_KEY); } catch (_) {}
+        }
+        render();
+      }
+
+      function errorText(payload, status) {
+        if (payload && typeof payload.message === "string") return payload.message;
+        if (payload && payload.error && typeof payload.error.message === "string") return payload.error.message;
+        if (payload && typeof payload.error === "string") return payload.error;
+        if (status === 401 || status === 403) return "配对工作阶段已失效，请重新输入桌面端配对码。";
+        if (status === 409 || status === 412) return "控制器状态已更新；指令未重送，请等待状态同步后重新操作。";
+        if (status === 0) return "无法连线到控制服务，请确认手机与桌面端连线。";
+        return "请求未完成（HTTP " + status + "）。";
+      }
+
+      async function request(path, options) {
+        const requestId = ++requestSequence;
+        const config = options || {};
+        const headers = { Accept: "application/json" };
+        const init = {
+          method: config.method || "GET",
+          headers: headers,
+          cache: "no-store",
+          credentials: "same-origin"
+        };
+        if (config.auth !== false && token) headers.Authorization = "Bearer " + token;
+        if (Object.prototype.hasOwnProperty.call(config, "body")) {
+          headers["Content-Type"] = "application/json";
+          init.body = JSON.stringify(config.body);
+        }
+        let response;
+        try { response = await fetch(path, init); }
+        catch (_) {
+          const error = new Error(errorText(null, 0));
+          error.status = 0;
+          error.requestId = requestId;
+          throw error;
+        }
+        const raw = await response.text();
+        let payload = null;
+        if (raw) {
+          try { payload = JSON.parse(raw); } catch (_) { payload = null; }
+        }
+        if (!response.ok) {
+          const error = new Error(errorText(payload, response.status));
+          error.status = response.status;
+          error.requestId = requestId;
+          error.payload = payload;
+          throw error;
+        }
+        return { status: response.status, payload: payload, requestId: requestId };
+      }
+
+      function stateFrom(payload) {
+        if (payload && payload.state && typeof payload.state === "object") return payload.state;
+        return payload;
+      }
+
+      function applyState(payload, sequence) {
+        const next = stateFrom(payload);
+        if (!next || typeof next !== "object" || !finite(next.revision)) return false;
+        const revision = Number(next.revision);
+        const nextServerTime = Number(next.serverTime);
+        if (revision < lastAppliedRevision) return false;
+        if (revision === lastAppliedRevision && sequence < lastAppliedSequence) return false;
+        if (revision === lastAppliedRevision && state && Number.isFinite(nextServerTime) &&
+            Number.isFinite(Number(state.serverTime)) && nextServerTime < Number(state.serverTime)) return false;
+
+        const receivedAt = performance.now();
+        state = next;
+        state.revision = revision;
+        lastAppliedRevision = revision;
+        lastAppliedSequence = sequence;
+        heartbeatAt = Date.now();
+        if (state.arm === "left" || state.arm === "right") selectedArm = state.arm;
+        if (Number.isFinite(nextServerTime) && (serverClock === null || nextServerTime > serverClock)) {
+          serverClock = nextServerTime;
+          clientClock = receivedAt;
+        }
+        render();
+
+        if (gesture && gesture.sentAny && state.phase === "settling") {
+          finishGesture("lost", true);
+        }
+        return true;
+      }
+
+      function formatCoordinate(value) {
+        const n = Number(value);
+        return Number.isFinite(n) ? n.toFixed(1) : "—";
+      }
+
+      function render() {
+        const secure = secureTransport();
+        el.secureBadge.textContent = secure ? "安全连线" : "需要 HTTPS";
+        el.secureBadge.className = "pill " + (secure ? "secure" : "insecure");
+        el.pairForm.hidden = Boolean(token);
+        el.pairedPanel.hidden = !token;
+        el.pairButton.disabled = pairing || !secure || el.pairCode.value.length !== 8;
+
+        el.armChoices.forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.arm === selectedArm));
+        });
+
+        const hasState = Boolean(state);
+        const fresh = hasState && Date.now() - heartbeatAt < 3500;
+        const online = Boolean(token && fresh);
+        el.connectionLed.className = "led" + (online ? " online" : "");
+        el.connectionText.textContent = !token ? "尚未配对" : !hasState ? "等待控制器" :
+          !fresh ? "状态暂时中断" : (state.live ? "实机工作阶段" : "模拟工作阶段");
+        el.connectionDetail.textContent = !token ? "配对后开始读取状态" : !hasState ?
+          "正在取得控制器状态" : "约每秒同步 · 修订 " + asText(state.revision, "—");
+
+        el.connectionPill.textContent = !token ? "未配对" : !online ? "等待同步" :
+          state.live ? "实机连接" : "模拟连接";
+        el.connectionPill.className = "pill" + (online ? (state.live ? " live" : " secure") : "");
+        const live = hasState && state.live === true;
+        el.liveBadge.textContent = !hasState ? "等待状态" : live ? "实机控制" : "模拟模式";
+        el.liveBadge.className = "pill" + (live ? " live" : "");
+
+        const phase = hasState ? state.phase : null;
+        el.phaseBadge.textContent = phaseName(phase);
+        el.phaseBadge.className = "pill" +
+          (phase === "ready" ? " ready" :
+          ["opening", "moving", "driving", "settling", "stopping"].includes(phase) ? " busy" :
+          phase === "fault" ? " fault" : "");
+
+        const mode = hasState && state.mode !== null && state.mode !== undefined ? state.mode : null;
+        el.modeValue.textContent = mode === null ? "—" :
+          "RobotMode " + String(mode) + (modes[mode] ? " · " + modes[mode] : "");
+        el.activeArmLabel.textContent = hasState && state.arm ? armName(state.arm) : armName(selectedArm) + " · 待启用";
+        el.activeModeLabel.textContent = mode === null ? "RobotMode —" :
+          "RobotMode " + String(mode) + (modes[mode] ? " · " + modes[mode] : "");
+        el.activePhaseLabel.textContent = phaseName(phase);
+        document.body.classList.toggle("control-active", Boolean(token && hasState && state.arm && phase !== "idle"));
+        const pose = hasState && Array.isArray(state.pose) ? state.pose : null;
+        el.poseX.textContent = pose && pose.length > 0 ? formatCoordinate(pose[0]) : "—";
+        el.poseY.textContent = pose && pose.length > 1 ? formatCoordinate(pose[1]) : "—";
+        el.poseZ.textContent = pose && pose.length > 2 ? formatCoordinate(pose[2]) : "—";
+        el.syncCopy.textContent = !hasState ? "尚未收到控制器状态。" :
+          "来自最近一次状态回应 · " + (online ? "连线正常" : "等待重新同步");
+        showStateMessage(hasState && typeof state.message === "string" ? state.message : "");
+
+        const activeArm = hasState ? state.arm : null;
+        const armActive = activeArm === "left" || activeArm === "right";
+        const localBusy = opening || stepping || stopPending > 0 || releasePending > 0 || Boolean(gesture) || driveInFlight;
+        const serverBusy = ["opening", "moving", "driving", "settling", "stopping"].includes(phase);
+        const busy = localBusy || serverBusy;
+        const canChooseArm = Boolean(token && (!armActive || phase === "idle"));
+        el.armChoices.forEach((button) => { button.disabled = !canChooseArm; });
+
+        if (!hasState) {
+          el.armSummaryTitle.textContent = "尚未启用";
+          el.armSummaryText.textContent = "配对并读取控制器状态后，才能确认启用所选机械臂。";
+        } else if (phase === "fault") {
+          el.armSummaryTitle.textContent = "需要停止并释放";
+          el.armSummaryText.textContent = "控制器回报故障。先停止并释放，再依桌面端提示处理。";
+        } else if (armActive && phase !== "idle") {
+          el.armSummaryTitle.textContent = armName(activeArm) + "控制中";
+          el.armSummaryText.textContent = "目前控制权属於" + armName(activeArm) + "；切换前请停止并释放。";
+        } else {
+          el.armSummaryTitle.textContent = "准备取得控制权";
+          el.armSummaryText.textContent = "将在实机工作阶段中启用" + armName(selectedArm) + "。";
+        }
+        const canOpen = Boolean(token && hasState && phase === "idle" &&
+          !armActive && !busy && motionClockReady());
+        el.openButton.disabled = !canOpen;
+        el.openButton.textContent = armActive && phase !== "idle" ? "已启用" + armName(activeArm) : "确认启用" + armName(selectedArm);
+
+        const canDrive = Boolean(token && hasState && phase === "ready" &&
+          armActive && activeArm === selectedArm && motionClockReady() &&
+          !opening && !stepping && !stopPending && !releasePending && !gesture && !driveInFlight);
+        el.xyPad.classList.toggle("locked", !canDrive && !gesture);
+        el.zTrack.classList.toggle("locked", !canDrive && !gesture);
+        el.xyKnob.classList.toggle("active", Boolean(gesture && gesture.kind === "xy"));
+        el.xyPad.setAttribute("aria-disabled", String(!canDrive && !gesture));
+        el.zTrack.setAttribute("aria-disabled", String(!canDrive && !gesture));
+
+        if (gesture) {
+          el.driveBadge.textContent = "拖曳中";
+          el.driveBadge.className = "pill busy";
+          el.contactState.textContent = "手势有效 · 约 90 ms 更新";
+          el.contactState.className = "contact-state";
+        } else if (lostContact) {
+          el.driveBadge.textContent = "接触中断";
+          el.driveBadge.className = "pill fault";
+          el.contactState.textContent = "已解除；请重新按下开始";
+          el.contactState.className = "contact-state lost";
+        } else if (canDrive) {
+          el.driveBadge.textContent = "拖曳已就绪";
+          el.driveBadge.className = "pill ready";
+          el.contactState.textContent = driveInFlight ? "等待控制器回应" : "可开始新手势";
+          el.contactState.className = "contact-state";
+        } else {
+          el.driveBadge.textContent = "移动已锁定";
+          el.driveBadge.className = "pill";
+          el.contactState.textContent = !motionClockReady() && token ? "等待安全时间同步" : "等待配对与启用";
+          el.contactState.className = "contact-state";
+        }
+
+        if (!token || !hasState || !motionClockReady()) {
+          el.motionLock.className = "motion-lock";
+          el.lockTitle.textContent = "移动已锁定";
+          el.lockDetail.textContent = !token ? "先完成桌面配对。" :
+            !live ? "仅实机工作阶段开放移动。" :
+            !motionClockReady() ? "等待控制器安全时间同步。" : "等待控制器状态。";
+        } else if (phase === "fault") {
+          el.motionLock.className = "motion-lock fault";
+          el.lockTitle.textContent = "故障锁定";
+          el.lockDetail.textContent = "先停止并释放，再依桌面端提示处理。";
+        } else if (gesture || ["opening", "moving", "driving", "settling", "stopping"].includes(phase) || busy || phase !== "ready" || !armActive || activeArm !== selectedArm) {
+          el.motionLock.className = "motion-lock busy";
+          el.lockTitle.textContent = gesture || phase === "driving" ? "拖曳控制中" :
+            phase === "settling" ? "等待机械臂稳定" :
+            phase === "moving" ? "单步执行中" :
+            phase === "opening" ? "正在取得控制权" :
+            phase === "stopping" ? "正在停止并释放" : "移动已锁定";
+          el.lockDetail.textContent = gesture ? "保持手势即可更新；放开即解除控制。" :
+            "等待机械臂回到就绪状态后再开始下一个动作。";
+        } else {
+          el.motionLock.className = "motion-lock ready";
+          el.lockTitle.textContent = "移动控制已就绪";
+          el.lockDetail.textContent = armName(activeArm) + " · 拖曳拇指，或展开点按单步。";
+        }
+
+        const canStep = Boolean(canDrive && !gesture && !driveInFlight && !driveTimer);
+        el.moveButtons.forEach((button) => { button.disabled = !canStep; });
+        el.stepChoices.forEach((button) => {
+          button.setAttribute("aria-pressed", String(Number(button.dataset.step) === stepSize));
+        });
+        const view = hasState && VIEW_NAMES[state.view] ? state.view : "front";
+        const speed = hasState && Number.isFinite(Number(state.speed)) ? Number(state.speed) : 30;
+        const canSet = Boolean(token && hasState && !settingsPending);
+        el.viewChoices.forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.view === view));
+          button.disabled = !canSet || Boolean(gesture) || phase === "driving" || phase === "settling";
+        });
+        if (!speedDragging) {
+          el.speedSlider.value = String(speed);
+          el.speedValue.textContent = Math.round(speed) + " mm/s";
+        }
+        el.speedSlider.disabled = !(token && hasState);
+        el.viewBadge.textContent = "站在" + VIEW_NAMES[view];
+        const calibArm = armActive ? activeArm : selectedArm;
+        const frontDeg = hasState && state.front ? Number(state.front[calibArm]) : 270;
+        el.frontText.textContent = armName(calibArm) + "前方 = 基座 " + (AXIS_OF_DEG[frontDeg] || "?");
+        el.rotateFront.disabled = !canSet || Boolean(gesture) || phase === "driving" || phase === "settling";
+        const canAct = Boolean(canStep && !stepping);
+        const canRecover = Boolean(token && hasState && motionClockReady() && !busy && !gesture &&
+          (phase === "idle" || phase === "fault" || (phase === "ready" && activeArm === selectedArm)));
+        el.recoverButton.disabled = !canRecover;
+        el.homeButton.disabled = !canAct;
+        el.cameraButton.disabled = !canAct;
+        el.gripOpenButton.disabled = !canAct;
+        el.gripCloseButton.disabled = !canAct;
+        const grip = hasState && Number.isFinite(Number(state.gripper)) && state.gripper !== null ? Number(state.gripper) : null;
+        el.gripperBadge.textContent = grip === null ? "夹爪 —" : grip >= 200 ? "夹爪 张开" : grip <= 30 ? "夹爪 闭合" : "夹爪 " + grip;
+        el.stopButton.disabled = !token;
+        el.stopLabel.textContent = stopPending > 0 ? "再次停止并释放" : "停止并释放";
+      }
+
+      function pollState() {
+        if (!token) return;
+        request("/api/state", { method: "GET" }).then((result) => {
+          const applied = applyState(result.payload, result.requestId);
+          if (applied && noticeKind === "error") showNotice("控制器状态已同步。", "info");
+        }).catch((error) => {
+          if (error.status === 401 || error.status === 403) {
+            endGesture("auth", false);
+            setToken(null);
+            state = null;
+            serverClock = null;
+            clientClock = null;
+            lastAppliedRevision = -1;
+            lastAppliedSequence = -1;
+            showNotice(error.message, "error");
+          } else if (!state) {
+            showNotice(error.message, "error");
+          }
+          render();
+        });
+      }
+
+      async function pair(event) {
+        event.preventDefault();
+        const code = el.pairCode.value.trim();
+        if (!/^[0-9]{8}$/.test(code) || !secureTransport() || pairing) return;
+        pairing = true;
+        render();
+        showNotice("正在使用配对码建立工作阶段…", "info");
+        try {
+          const result = await request("/api/pair", { method: "POST", auth: false, body: { code: code } });
+          const newToken = result.payload && result.payload.token;
+          if (typeof newToken !== "string" || !newToken) throw new Error("配对服务未回传有效工作阶段。");
+          setToken(newToken);
+          el.pairCode.value = "";
+          showNotice("配对成功，正在同步控制器状态。", "success");
+          pollState();
+        } catch (error) {
+          showNotice(error.message, "error");
+        } finally {
+          pairing = false;
+          render();
+        }
+      }
+
+      function openConfirmation(event) {
+        if (!token || !state || state.phase !== "idle" || state.arm ||
+            !motionClockReady() || opening) return;
+        if (!state.live) {
+          openSelectedArm(event);
+          return;
+        }
+        el.confirmArm.textContent = armName(selectedArm);
+        el.openDialog.hidden = false;
+        el.openDialog.setAttribute("aria-hidden", "false");
+        el.cancelOpen.focus();
+      }
+
+      function closeConfirmation() {
+        el.openDialog.hidden = true;
+        el.openDialog.setAttribute("aria-hidden", "true");
+        el.openButton.focus();
+      }
+
+      async function openSelectedArm(event) {
+        if (!token || !state || state.phase !== "idle" || state.arm ||
+            !motionClockReady() || opening) return;
+        const issued = issuedForEvent(event);
+        if (!Number.isFinite(issued)) {
+          showNotice("尚未收到控制器安全时间，启用要求未送出。", "error");
+          closeConfirmation();
+          return;
+        }
+        closeConfirmation();
+        opening = true;
+        const epoch = operationEpoch;
+        render();
+        showNotice("正在送出" + armName(selectedArm) + "启用要求…", "info");
+        try {
+          const result = await request("/api/open", {
+            method: "POST",
+            body: { arm: selectedArm, revision: state.revision, issued: issued }
+          });
+          if (epoch === operationEpoch) {
+            applyState(result.payload, result.requestId);
+            showNotice("启用要求已送达。", "success");
+          }
+        } catch (error) {
+          if (epoch === operationEpoch) {
+            showNotice(error.message, "error");
+            if (error.status === 409 || error.status === 412) pollState();
+          }
+        } finally {
+          opening = false;
+          render();
+        }
+      }
+
+      function canBeginGesture() {
+        return Boolean(token && state && state.phase === "ready" &&
+          (state.arm === "left" || state.arm === "right") && state.arm === selectedArm &&
+          motionClockReady() && !opening && !stepping && !stopPending &&
+          !releasePending && !gesture && !driveInFlight);
+      }
+
+      function setKnobXY(x, y) {
+        el.xyKnob.style.setProperty("--knob-x", x + "px");
+        el.xyKnob.style.setProperty("--knob-y", y + "px");
+      }
+
+      function setKnobZ(y) {
+        el.zKnob.style.setProperty("--z-knob-y", y + "px");
+      }
+
+      function updateVector(g, clientX, clientY) {
+        g.lastPointerAt = performance.now();
+        if (g.kind === "xy") {
+          const rect = el.xyPad.getBoundingClientRect();
+          const radius = Math.max(25, Math.min(rect.width, rect.height) * .41);
+          let dx = clientX - (rect.left + rect.width / 2);
+          let dy = clientY - (rect.top + rect.height / 2);
+          const length = Math.hypot(dx, dy);
+          if (length > radius) {
+            dx = dx * radius / length;
+            dy = dy * radius / length;
+          }
+          const normalized = Math.hypot(dx, dy) / radius;
+          setKnobXY(dx, dy);
+          if (normalized >= DEAD_ZONE) {
+            g.x = Math.max(-1, Math.min(1, dx / radius));
+            g.y = Math.max(-1, Math.min(1, -dy / radius));
+            g.z = 0;
+            g.drove = true;
+            g.engaged = true;
+          } else {
+            g.x = 0;
+            g.y = 0;
+            g.z = 0;
+            if (!g.drove) g.engaged = false;
+          }
+        } else {
+          const rect = el.zTrack.getBoundingClientRect();
+          const extent = Math.max(20, rect.height / 2 - 22);
+          const center = rect.top + rect.height / 2;
+          const offset = Math.max(-extent, Math.min(extent, clientY - center));
+          const value = -offset / extent;
+          setKnobZ(offset);
+          g.x = 0;
+          g.y = 0;
+          g.z = Math.abs(value) >= DEAD_ZONE ? value : 0;
+          if (Math.abs(value) >= DEAD_ZONE) {
+            g.drove = true;
+            g.engaged = true;
+          } else if (!g.drove) {
+            g.engaged = false;
+          }
+        }
+        if (g.engaged && !driveInFlight && !driveTimer) scheduleDrive(0);
+        render();
+      }
+
+      function hasLivePointer(g) {
+        if (!g || !g.touchAlive || document.visibilityState !== "visible" || !document.hasFocus()) return false;
+        try { return g.target.hasPointerCapture(g.pointerId); }
+        catch (_) { return false; }
+      }
+
+      function scheduleDrive(delay) {
+        if (driveTimer || !gesture || !gesture.engaged) return;
+        driveTimer = window.setTimeout(() => {
+          driveTimer = 0;
+          sendDriveSample();
+        }, delay);
+      }
+
+      async function sendDriveSample() {
+        const g = gesture;
+        if (!g || !g.engaged || driveInFlight) return;
+        if (!hasLivePointer(g)) {
+          finishGesture("lost", true);
+          return;
+        }
+        const sampleTime = performance.now();
+        const issued = issuedAt(sampleTime);
+        if (!Number.isFinite(issued)) {
+          finishGesture("clock", true);
+          showNotice("安全时间同步中断；拖曳已解除。", "error");
+          return;
+        }
+        if (g.driveRevision === null && Math.hypot(g.x, g.y, g.z) < DEAD_ZONE) {
+          g.engaged = false;
+          render();
+          return;
+        }
+        const seq = ++highestDriveSeq;
+        const body = { seq: seq, x: g.x, y: g.y, z: g.z, issued: issued };
+        if (g.driveRevision === null) {
+          if (!state || !finite(state.revision)) {
+            finishGesture("lost", true);
+            return;
+          }
+          body.revision = Number(state.revision);
+        } else {
+          body.revision = g.driveRevision;
+        }
+        g.drove = true;
+        g.sentAny = true;
+        g.lastAckAt = sampleTime;
+        driveInFlight = true;
+        render();
+        try {
+          const result = await request("/api/drive", { method: "POST", body: body });
+          const responseState = stateFrom(result.payload);
+          if (responseState && finite(responseState.revision)) {
+            applyState(result.payload, result.requestId);
+            if (g.driveRevision === null) {
+              if (responseState.phase !== "driving") {
+                if (gesture === g) finishGesture("lost", true);
+              } else {
+                g.driveRevision = Number(responseState.revision);
+              }
+            }
+            if (gesture === g) g.lastAckAt = performance.now();
+          } else if (gesture === g) {
+            finishGesture("lost", true);
+            showNotice("拖曳回应缺少控制器状态；手势已解除。", "error");
+          }
+        } catch (error) {
+          if (gesture === g) {
+            finishGesture("lost", true);
+            showNotice(error.message + " 拖曳已解除，请重新按下开始。", "error");
+            if (error.status === 409 || error.status === 412) pollState();
+          }
+        } finally {
+          driveInFlight = false;
+          render();
+          if (gesture && gesture.engaged && gesture.driveRevision !== null) scheduleDrive(DRIVE_PERIOD_MS);
+        }
+      }
+
+      function resetSpring() {
+        setKnobXY(0, 0);
+        setKnobZ(0);
+        el.xyKnob.classList.remove("active");
+      }
+
+      function finishGesture(reason, sendRelease) {
+        if (!gesture) return;
+        const ended = gesture;
+        gesture = null;
+        ended.touchAlive = false;
+        if (driveTimer) {
+          window.clearTimeout(driveTimer);
+          driveTimer = 0;
+        }
+        try {
+          if (ended.target.hasPointerCapture(ended.pointerId)) ended.target.releasePointerCapture(ended.pointerId);
+        } catch (_) {}
+        resetSpring();
+
+        if (reason === "lost") {
+          lostContact = true;
+          el.contactState.textContent = "接触中断 · 已解除";
+          el.contactState.className = "contact-state lost";
+          showNotice("操纵接触中断，拖曳已解除。等待机械臂稳定后，请重新按下开始。", "error");
+        } else if (reason === "auth") {
+          lostContact = true;
+        } else {
+          lostContact = false;
+          if (reason === "up" && ended.sentAny) showNotice("拖曳已解除，等待机械臂稳定。", "info");
+        }
+
+        if (sendRelease && ended.sentAny && token) sendReleasePacket();
+        render();
+      }
+
+      function endGesture(reason, sendRelease) {
+        finishGesture(reason, sendRelease);
+      }
+
+      async function sendReleasePacket() {
+        if (!token) return;
+        const seq = ++highestDriveSeq;
+        releasePending += 1;
+        render();
+        try {
+          const result = await request("/api/release", { method: "POST", body: { seq: seq } });
+          applyState(result.payload, result.requestId);
+          if (lostContact) {
+            showNotice("已送出解除拖曳要求；等待控制器稳定后可重新开始。", "error");
+          }
+        } catch (error) {
+          showNotice("解除拖曳要求未确认：" + error.message, "error");
+        } finally {
+          releasePending = Math.max(0, releasePending - 1);
+          render();
+        }
+      }
+
+      function pointerDown(kind, event) {
+        if (!canBeginGesture() || gesture) return;
+        event.preventDefault();
+        const target = event.currentTarget;
+        try { target.setPointerCapture(event.pointerId); }
+        catch (_) { return; }
+        gesture = {
+          kind: kind,
+          target: target,
+          pointerId: event.pointerId,
+          pointerType: event.pointerType,
+          touchAlive: true,
+          drove: false,
+          sentAny: false,
+          engaged: false,
+          x: 0,
+          y: 0,
+          z: 0,
+          driveRevision: null,
+          lastPointerAt: performance.now(),
+          lastAckAt: performance.now()
+        };
+        lostContact = false;
+        updateVector(gesture, event.clientX, event.clientY);
+      }
+
+      function pointerMove(event) {
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        event.preventDefault();
+        updateVector(gesture, event.clientX, event.clientY);
+      }
+
+      function pointerUp(event) {
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        event.preventDefault();
+        finishGesture("up", true);
+      }
+
+      async function sendStep(axis, direction) {
+        if (!token || !state || state.phase !== "ready" ||
+            state.arm !== selectedArm || !motionClockReady() || stepping ||
+            gesture || driveInFlight || driveTimer || releasePending || stopPending) return;
+        const eventTime = performance.now();
+        const issued = issuedAt(eventTime);
+        if (!Number.isFinite(issued)) {
+          showNotice("尚未收到控制器安全时间，单步指令未送出。", "error");
+          return;
+        }
+        stepping = true;
+        const epoch = operationEpoch;
+        const revision = state.revision;
+        const amount = stepSize;
+        render();
+        showNotice("送出 " + axis + (direction > 0 ? "+" : "−") + " " + amount + " mm 单步…", "info");
+        try {
+          const result = await request("/api/step", {
+            method: "POST",
+            body: { axis: axis, direction: direction, mm: amount, revision: revision, issued: issued }
+          });
+          if (epoch === operationEpoch) {
+            applyState(result.payload, result.requestId);
+            showNotice("单步指令已接受。", "success");
+          }
+        } catch (error) {
+          if (epoch === operationEpoch) {
+            showNotice(error.message, "error");
+            if (error.status === 409 || error.status === 412) pollState();
+          }
+        } finally {
+          stepping = false;
+          render();
+        }
+      }
+
+      async function sendAction(path, body, label) {
+        if (!token || !state || state.phase !== "ready" ||
+            state.arm !== selectedArm || !motionClockReady() || stepping ||
+            gesture || driveInFlight || driveTimer || releasePending || stopPending) return;
+        const issued = issuedAt(performance.now());
+        if (!Number.isFinite(issued)) {
+          showNotice("尚未收到控制器安全时间，指令未送出。", "error");
+          return;
+        }
+        stepping = true;
+        const epoch = operationEpoch;
+        render();
+        showNotice("送出：" + label + "…", "info");
+        try {
+          const payload = Object.assign({ revision: state.revision, issued: issued }, body || {});
+          const result = await request(path, { method: "POST", body: payload });
+          if (epoch === operationEpoch) {
+            applyState(result.payload, result.requestId);
+            showNotice(label + "：已接受。", "success");
+          }
+        } catch (error) {
+          if (epoch === operationEpoch) {
+            showNotice(error.message, "error");
+            if (error.status === 409 || error.status === 412) pollState();
+          }
+        } finally {
+          stepping = false;
+          render();
+        }
+      }
+
+      async function postSettings(path, body, label) {
+        if (!token || settingsPending) return;
+        settingsPending = true;
+        render();
+        try {
+          const result = await request(path, { method: "POST", body: body });
+          applyState(result.payload, result.requestId);
+          showNotice(label, "success");
+        } catch (error) {
+          showNotice(error.message, "error");
+        } finally {
+          settingsPending = false;
+          render();
+        }
+      }
+
+      function liveConfirm(text) {
+        return !(state && state.live) || window.confirm(text);
+      }
+
+      async function stopAndRelease() {
+        if (!token) return;
+        operationEpoch += 1;
+        if (gesture) finishGesture("stop", true);
+        stopPending += 1;
+        const epoch = operationEpoch;
+        render();
+        showNotice("已送出停止并释放要求。", "info");
+        try {
+          const result = await request("/api/stop", { method: "POST", body: {} });
+          if (epoch === operationEpoch) {
+            applyState(result.payload, result.requestId);
+            showNotice("停止并释放要求已送达。", "success");
+          }
+        } catch (error) {
+          if (epoch === operationEpoch) showNotice(error.message, "error");
+        } finally {
+          stopPending = Math.max(0, stopPending - 1);
+          render();
+        }
+      }
+
+      function pointerCancel(event) {
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        finishGesture("lost", true);
+      }
+
+      function releaseForLifecycle() {
+        if (gesture) finishGesture("lost", true);
+      }
+
+      el.pairForm.addEventListener("submit", pair);
+      el.pairCode.addEventListener("input", () => {
+        el.pairCode.value = el.pairCode.value.replace(/[^0-9]/g, "").slice(0, 8);
+        render();
+      });
+      el.armChoices.forEach((button) => {
+        button.addEventListener("click", () => {
+          if (button.disabled) return;
+          selectedArm = button.dataset.arm;
+          render();
+        });
+      });
+      el.stepChoices.forEach((button) => {
+        button.addEventListener("click", () => {
+          stepSize = Number(button.dataset.step);
+          render();
+        });
+      });
+      el.moveButtons.forEach((button) => {
+        button.addEventListener("click", () => sendStep(button.dataset.axis, Number(button.dataset.direction)));
+      });
+      el.viewChoices.forEach((button) => {
+        button.addEventListener("click", () => postSettings("/api/settings", { view: button.dataset.view },
+          "站位已设为" + VIEW_NAMES[button.dataset.view] + "。"));
+      });
+      el.speedSlider.addEventListener("input", () => {
+        speedDragging = true;
+        el.speedValue.textContent = el.speedSlider.value + " mm/s";
+      });
+      el.speedSlider.addEventListener("change", async () => {
+        const value = Number(el.speedSlider.value);
+        await postSettings("/api/settings", { speed: value }, "速度已设为 " + value + " mm/s。");
+        speedDragging = false;
+        render();
+      });
+      el.rotateFront.addEventListener("click", () => {
+        const arm = state && (state.arm === "left" || state.arm === "right") ? state.arm : selectedArm;
+        const current = state && state.front ? Number(state.front[arm]) : 270;
+        const next = (current + 90) % 360;
+        postSettings("/api/front", { arm: arm, deg: next }, armName(arm) + "前方已改为基座 " + AXIS_OF_DEG[next] + "，请再推一次摇杆确认。");
+      });
+      el.homeButton.addEventListener("click", () => {
+        if (liveConfirm("机械臂将以关节运动回到初始位。确认整条路径无人无障碍？")) sendAction("/api/home", {}, "复位");
+      });
+      el.cameraButton.addEventListener("click", () => {
+        if (liveConfirm("机械臂将以关节运动到拍摄位。确认整条路径无人无障碍？")) sendAction("/api/camera", {}, "到拍摄位");
+      });
+      el.gripOpenButton.addEventListener("click", () => {
+        if (liveConfirm("张开夹爪会松开夹着的东西。确认张开？")) sendAction("/api/gripper", { action: "open" }, "张开夹爪");
+      });
+      el.gripCloseButton.addEventListener("click", () => sendAction("/api/gripper", { action: "close" }, "闭合夹爪"));
+      el.recoverButton.addEventListener("click", async () => {
+        if (!state) return;
+        const arm = state.phase === "ready" ? state.arm : selectedArm;
+        if (!liveConfirm("将给" + armName(arm) + "上电（如未上电）、清除报警并重新使能，上电约需 10-20 秒。请确认急停已复位、报警原因已排除、周围无人。继续？")) return;
+        if (state.phase === "ready") {
+          sendAction("/api/recover", {}, "清除错误并重新使能");
+          return;
+        }
+        const issued = issuedAt(performance.now());
+        if (!Number.isFinite(issued)) { showNotice("尚未收到控制器安全时间，指令未送出。", "error"); return; }
+        opening = true;
+        render();
+        showNotice("正在上电/清错并使能" + armName(arm) + "，上电约需 10-20 秒…", "info");
+        try {
+          const result = await request("/api/recover", { method: "POST", body: { arm: arm, revision: state.revision, issued: issued } });
+          applyState(result.payload, result.requestId);
+          showNotice("清除与重新使能要求已送达。", "success");
+        } catch (error) {
+          showNotice(error.message, "error");
+          if (error.status === 409 || error.status === 412) pollState();
+        } finally {
+          opening = false;
+          render();
+        }
+      });
+      el.openButton.addEventListener("click", openConfirmation);
+      el.cancelOpen.addEventListener("click", closeConfirmation);
+      el.confirmOpen.addEventListener("click", openSelectedArm);
+      el.stopButton.addEventListener("click", stopAndRelease);
+      el.openDialog.addEventListener("click", (event) => {
+        if (event.target === el.openDialog) closeConfirmation();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !el.openDialog.hidden) closeConfirmation();
+      });
+
+      [el.xyPad, el.zTrack].forEach((surface) => {
+        const kind = surface === el.xyPad ? "xy" : "z";
+        surface.addEventListener("pointerdown", (event) => pointerDown(kind, event));
+        surface.addEventListener("pointermove", pointerMove);
+        surface.addEventListener("pointerup", pointerUp);
+        surface.addEventListener("pointercancel", pointerCancel);
+        surface.addEventListener("lostpointercapture", pointerCancel);
+        surface.addEventListener("contextmenu", (event) => event.preventDefault());
+      });
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible") releaseForLifecycle();
+      });
+      window.addEventListener("blur", releaseForLifecycle);
+      window.addEventListener("pagehide", releaseForLifecycle);
+      window.addEventListener("beforeunload", releaseForLifecycle);
+
+      window.setInterval(() => {
+        if (!gesture || !gesture.sentAny) return;
+        if (!hasLivePointer(gesture)) {
+          finishGesture("lost", true);
+          return;
+        }
+        if (performance.now() - gesture.lastAckAt > CONTACT_TIMEOUT_MS) {
+          finishGesture("lost", true);
+        }
+      }, 90);
+
+      render();
+      // Poll unconditionally: pollState() is a no-op until paired, so a phone
+      // that pairs after load still receives state updates.
+      if (token) pollState();
+      window.setInterval(pollState, 1000);
+      window.setInterval(render, 1000);
+    })();
+  </script>
+</body>
+</html>
