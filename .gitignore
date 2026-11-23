@@ -15,6 +15,7 @@ __pycache__/
 gateway-data/
 calibration-data/
 .venv-calibration/
+.venv-perception/
 task_skills/artifacts/
 *.ckpt
 *.pt

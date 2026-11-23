@@ -116,7 +116,7 @@ def start_refusal(mode: Any) -> str | None:
     if mode == ALARM_MODE:
         return f"{label}：请先在示教器上查看报警原因并手动清除，本程序不会清报警"
     if mode == 3:
-        return f"{label}：请先用示教器或 DobotStudio 上电，本程序不会上电"
+        return f"{label}：请先复位急停并上电（手机遥控可点“上电 / 清错并使能”）"
     return f"{label}：只在未使能(4)或使能空闲(5)时接管"
 
 HELP = """\
@@ -261,8 +261,13 @@ class SimArm:
         self.pose = [*xyz, *rpy]  # an instant arm
         self.joints = list(joints)
 
+    def move_joint(self, xyz, rpy, joints) -> None:
+        """Joint-space move to ``joints`` (``xyz``/``rpy`` are its forward kinematics)."""
+        self.move(xyz, rpy, joints)
+
     def wait(self, xyz, rpy, joints, stop_pressed: Callable[[], bool],
-             progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+             progress: Callable[[dict[str, Any]], None] | None = None,
+             timeout_s: float | None = None) -> dict[str, Any]:
         self.pose = [*xyz, *rpy]
         self.joints = list(joints)
         if progress is not None:
@@ -358,9 +363,18 @@ class LiveArm:
 
         self.driver._send_motion(self.rig, linear_frame(xyz, rpy), "jog MovL")
 
+    def move_joint(self, xyz, rpy, joints) -> None:
+        """JointMovJ: the controller interpolates the joints linearly (what the planner sampled)."""
+        from .chemistry.driver import joint_frame
+
+        self.driver._send_motion(self.rig, joint_frame(joints), "JointMovJ")
+
     def wait(self, xyz, rpy, joints, stop_pressed: Callable[[], bool],
-             progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
-        deadline = time.time() + ARRIVAL_TIMEOUT_S
+             progress: Callable[[dict[str, Any]], None] | None = None,
+             timeout_s: float | None = None) -> dict[str, Any]:
+        """Poll until settled at ``xyz``; ``timeout_s`` (default ARRIVAL_TIMEOUT_S) for long single moves."""
+        timeout = ARRIVAL_TIMEOUT_S if timeout_s is None else float(timeout_s)
+        deadline = time.time() + timeout
         stable = 0
         while time.time() < deadline:
             if stop_pressed():
@@ -377,7 +391,7 @@ class LiveArm:
                 return state
             time.sleep(POLL_S)
         self.stop()
-        raise RuntimeError(f"{ARRIVAL_TIMEOUT_S:.0f} s 内未到达目标，已发送 StopScript")
+        raise RuntimeError(f"{timeout:.0f} s 内未到达目标，已发送 StopScript")
 
     def jog(self, label: str) -> None:
         # Default CoordType=1 (user frame), User0/Tool0 per the Dobot SDK docstring.
@@ -922,7 +936,8 @@ def _windows_keys() -> KeySource:
     def stop_pressed() -> bool:
         pressed = False
         while msvcrt.kbhit():
-            pressed = pressed or msvcrt.getwch() == " "
+            if msvcrt.getwch() == " ":
+                pressed = True
         return pressed
 
     def discard() -> None:

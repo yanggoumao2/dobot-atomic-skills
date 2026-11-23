@@ -1,0 +1,44 @@
+{
+  "M": [
+    [
+      0.9988218556252516,
+      0.04085584629616667,
+      -0.02618588453257869
+    ],
+    [
+      -0.04077329838416952,
+      0.9991616507793658,
+      0.003678824639586268
+    ],
+    [
+      0.02631423311071435,
+      -0.0026068055695311373,
+      0.9996503217128067
+    ]
+  ],
+  "angle_deg": 2.7873,
+  "matches": 1703,
+  "inliers": 952,
+  "rms_px": 0.965,
+  "max_px": 2.002,
+  "median_image_shift_px": [
+    -19.4,
+    -6.41
+  ],
+  "old": [
+    "calibration-data\\vision-pick\\trial-20261104_205655\\frame.png",
+    "calibration-data\\vision-pick\\trial-20261104_210735\\frame.png",
+    "calibration-data\\vision-pick\\trial-20261104_210835\\frame.png",
+    "calibration-data\\vision-pick\\trial-20261104_211851\\frame.png",
+    "calibration-data\\vision-pick\\trial-20261104_212951\\frame.png",
+    "calibration-data\\vision-pick\\trial-20261104_213133\\frame.png"
+  ],
+  "new": [
+    "calibration-data\\chem-demo\\snap-20261120_204411\\top.png",
+    "calibration-data\\chem-demo\\snap-photo-20261120_212853\\top.png",
+    "calibration-data\\chem-demo\\snap-touch-214120\\top.png"
+  ],
+  "session": "C:\\Users\\49459\\Documents\\Codex\\projects\\dobot-atomic-skills\\calibration-data\\cal-20261103-153131-49df4d",
+  "model": "pure rotation about the camera centre; R_new = R_old @ M.T",
+  "time": "2026-11-20 21:51:31"
+}

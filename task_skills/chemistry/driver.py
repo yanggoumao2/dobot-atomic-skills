@@ -201,7 +201,7 @@ class _Feedback:
         return values  # type: ignore[return-value]
 
     def _read_packet(self) -> dict[str, Any]:
-        """The stream is a run of 1440-byte packets, so search for the magic.
+        """Resynchronize using packet length at byte 0 and the magic value at byte 48.
 
         While the controller is not in TCP remote mode the stream still flows but
         every payload is zero; those packets are rejected here so a zeroed stream
@@ -215,15 +215,16 @@ class _Feedback:
             if not chunk:
                 raise RuntimeError("feedback socket closed")
             buffer += chunk
-            index = buffer.find(FEEDBACK_MAGIC)
+            header = struct.pack("<Q", FEEDBACK_PACKET)
+            index = buffer.find(header)
             while index >= 0 and len(buffer) - index >= FEEDBACK_PACKET:
                 record = buffer[index:index + FEEDBACK_PACKET]
-                if record.startswith(FEEDBACK_MAGIC):
+                if record[48:56] == FEEDBACK_MAGIC:
                     values = self._decode(record)
                     if values is not None:
                         return values
                     zeroed = True
-                index = buffer.find(FEEDBACK_MAGIC, index + 1)
+                index = buffer.find(header, index + 1)
             buffer = buffer[-FEEDBACK_PACKET:]
         raise RuntimeError(
             "30004 feedback carries no usable packet"

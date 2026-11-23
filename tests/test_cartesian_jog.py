@@ -28,6 +28,14 @@ def make(arm=None, radius=200.0, z_min=150.0, z_max=350.0, record=None, answers=
 class CartesianJogTests(unittest.TestCase):
     """What matters on the rig: one axis per key, fixed orientation, refusals send nothing."""
 
+    @unittest.skipUnless(jogmod.sys.platform == "win32", "Windows console keyboard")
+    def test_stop_drains_keys_queued_after_space(self):
+        with mock.patch("msvcrt.kbhit", side_effect=[True, True, False]), \
+             mock.patch("msvcrt.getwch", side_effect=[" ", "a"]) as read:
+            stop_pressed = jogmod._windows_keys()[1]
+            self.assertTrue(stop_pressed())
+            self.assertEqual(read.call_count, 2)
+
     def test_each_key_moves_one_axis_and_never_changes_orientation(self):
         jog, arm, _ = make()
         for key in ("d", "4", "f", "1", "w", "RIGHT", "PGUP"):

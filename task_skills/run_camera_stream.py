@@ -29,7 +29,11 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-import cv2
+# MSMF hardware transforms make this top camera stall: it opens, then every
+# grab times out (~10 s, error 0x8000000A). Off by default (2026-11-13).
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+
+import cv2  # noqa: E402  (must follow the environment setting above)
 
 BOUNDARY = "frame"
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
@@ -52,22 +56,65 @@ class FrameSource:
         self._capture = None
         self._thread: threading.Thread | None = None
 
-    def start(self) -> None:
+    def _open(self, reads: int = 5):
+        """Open the device and return (capture, first frame), or (None, reason)."""
         capture = cv2.VideoCapture(self.device)
         if not capture.isOpened():
-            raise RuntimeError(f"cannot open camera {self.device}; close any program using it")
+            capture.release()
+            return None, "cannot open (is another program using it?)"
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        ok, frame = capture.read()
-        if not ok or frame is None:
-            capture.release()
-            raise RuntimeError(f"camera {self.device} opened but returned no frame")
+        for _ in range(reads):  # the first grabs after opening can fail on this camera
+            ok, frame = capture.read()
+            if ok and frame is not None:
+                return capture, frame
+        capture.release()
+        return None, "opened but returned no frame"
+
+    def start(self, attempts: int = 3) -> None:
+        reason = ""
+        for attempt in range(1, attempts + 1):
+            capture, result = self._open()
+            if capture is not None:
+                break
+            reason = result
+            print(f"camera {self.device}: attempt {attempt}/{attempts} {reason}", flush=True)
+            time.sleep(1.0)
+        else:
+            raise RuntimeError(f"camera {self.device} {reason}; try replugging its USB cable")
+        frame = result
         self._capture = capture
         self.status.update(open=True, actual_wh=[frame.shape[1], frame.shape[0]],
-                           backend=capture.getBackendName())
+                           backend=capture.getBackendName(), reconnects=0)
         self._publish(frame)
         self._thread = threading.Thread(target=self._loop, name="camera", daemon=True)
         self._thread.start()
+
+    def _reopen(self) -> None:
+        """Release the stalled device and reopen it until it answers or we stop.
+
+        ``open`` stays True meanwhile so viewers keep their connection and
+        resume when frames return, instead of the stream ending for good.
+        """
+        self.status["reconnecting"] = True
+        if self._capture is not None:
+            self._capture.release()
+            self._capture = None
+        delay = 1.0
+        while not self._stop.is_set():
+            capture, result = self._open(reads=3)
+            if capture is not None:
+                self._capture = capture
+                self.status["reconnects"] = self.status.get("reconnects", 0) + 1
+                self.status.pop("reconnecting", None)
+                self.status.pop("error", None)
+                print(f"camera {self.device}: reopened (reconnect #{self.status['reconnects']})", flush=True)
+                self._publish(result)
+                return
+            self.status["error"] = result
+            print(f"camera {self.device}: reopen failed ({result}); retry in {delay:.0f} s", flush=True)
+            self._stop.wait(delay)
+            delay = min(delay * 2, 10.0)
 
     def _publish(self, frame) -> None:
         if self.rotation is not None:
@@ -86,15 +133,20 @@ class FrameSource:
         failures = 0
         next_at = time.monotonic()
         while not self._stop.is_set():
+            if self._capture is None:
+                self._reopen()
+                continue
             ok, frame = self._capture.read()
             if not ok or frame is None:
+                # A failed grab on MSMF already blocked ~10 s, so two in a row
+                # means the device is stalled: reopen it rather than keep waiting.
                 failures += 1
-                if failures > 100:
-                    self.status.update(open=False, error="camera stopped returning frames")
-                    with self._cond:
-                        self._cond.notify_all()
-                    return
-                time.sleep(0.03)
+                if failures >= 2:
+                    print(f"camera {self.device}: no frames, reopening", flush=True)
+                    failures = 0
+                    self._reopen()
+                else:
+                    time.sleep(0.03)
                 continue
             failures = 0
             now = time.monotonic()
@@ -111,7 +163,7 @@ class FrameSource:
     def stop(self) -> None:
         self._stop.set()
         if self._thread is not None:
-            self._thread.join(timeout=2)
+            self._thread.join(timeout=12)  # a stalled MSMF grab can block ~10 s
         if self._capture is not None:
             self._capture.release()
         with self._cond:

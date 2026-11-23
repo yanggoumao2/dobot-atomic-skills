@@ -1,0 +1,66 @@
+{
+  "_note": "TCP = Tool0 flange in each arm's own base frame, mm and degrees. photo: both arms here before every top-camera snapshot; verified 2026-11-20 21:28 (top camera sees the whole white platform, both balances and their beakers, no occlusion).",
+  "photo": {
+    "right": {
+      "xyz": [
+        -300.0,
+        -160.0,
+        535.0
+      ],
+      "rpy": [
+        180.0,
+        0.0,
+        90.0
+      ]
+    },
+    "left": {
+      "xyz": [
+        300.0,
+        -160.0,
+        535.0
+      ],
+      "rpy": [
+        180.0,
+        0.0,
+        90.0
+      ]
+    }
+  },
+  "home_tcp": {
+    "right": {
+      "xyz": [
+        -117.6,
+        -344.8,
+        415.5
+      ],
+      "rpy": [
+        180.0,
+        0.0,
+        89.972
+      ]
+    },
+    "left": {
+      "xyz": [
+        117.6,
+        -344.8,
+        415.5
+      ],
+      "rpy": [
+        180.0,
+        0.0,
+        90.0
+      ],
+      "_note": "mirrored from right; matches the gripper seen in the top image"
+    }
+  },
+  "handoff_station": {
+    "left_tcp": [
+      129.97,
+      -357.08,
+      570.0
+    ],
+    "approach_offset_deg": 15.0,
+    "pitch_down_deg": 0.0,
+    "source": "run-20261123_155046-0654d8ac89"
+  }
+}

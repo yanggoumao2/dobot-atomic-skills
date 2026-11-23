@@ -492,7 +492,8 @@ class DriverSafetyTests(unittest.TestCase):
         from task_skills.chemistry.driver import FEEDBACK_MAGIC, FEEDBACK_PACKET
 
         record = bytearray(FEEDBACK_PACKET)
-        record[0:8] = FEEDBACK_MAGIC
+        struct_module.pack_into("<Q", record, 0, FEEDBACK_PACKET)
+        record[48:56] = FEEDBACK_MAGIC
         self.assertIsNone(_Feedback._decode(bytes(record)))
 
     def test_feedback_decoder_accepts_a_well_formed_packet(self):
@@ -500,12 +501,16 @@ class DriverSafetyTests(unittest.TestCase):
         from task_skills.chemistry.driver import FEEDBACK_MAGIC, FEEDBACK_PACKET
 
         record = bytearray(FEEDBACK_PACKET)
-        record[0:8] = FEEDBACK_MAGIC
+        struct_module.pack_into("<Q", record, 0, FEEDBACK_PACKET)
+        record[48:56] = FEEDBACK_MAGIC
         struct_module.pack_into("<Q", record, 24, 5)
         struct_module.pack_into("<6d", record, 432, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
         struct_module.pack_into("<6d", record, 624, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0)
         struct_module.pack_into("<B", record, 1026, 1)
-        decoded = _Feedback._decode(bytes(record))
+        feedback = object.__new__(_Feedback)
+        feedback.sock = mock.Mock()
+        feedback.sock.recv.side_effect = [b"partial" + record[:500], bytes(record[500:])]
+        decoded = feedback._read_packet()
         self.assertIsNotNone(decoded)
         self.assertEqual(decoded["robot_mode"][0], 5)
         self.assertEqual(decoded["q_actual"], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
