@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "captured_utc": "2026-10-20T09:54:06.586818+00:00",
+  "source_snapshot": "<local snapshot 2026-10-20>/dobot-calibration-ui/source",
+  "provenance_note": "Original user-supplied Nova2 calibration snapshot. Destination files were migrated into the atomic-skills package; hashes identify exactly which files were copied unchanged and which were adapted.",
+  "files": [
+    {
+      "source": "calibrate.py",
+      "source_sha256": "da5ce9f3942674698a2ca61bffd07fcf24a8f1d24cf7da58f33bfab65c6f3132",
+      "destination": "task_skills/calibration/calibrate.py",
+      "destination_sha256": "da5ce9f3942674698a2ca61bffd07fcf24a8f1d24cf7da58f33bfab65c6f3132",
+      "change": "unchanged"
+    },
+    {
+      "source": "table_calibration.py",
+      "source_sha256": "cb8a1c720660974f8dba963d2b8fd0e05abe588221c69396ae3909927e689a7c",
+      "destination": "task_skills/calibration/table_calibration.py",
+      "destination_sha256": "653e8dd84a95ba1620df5b4e6c06355fb2094b0c413c92b1415bc88f977a0105",
+      "change": "relative sibling import for package execution; standalone CLI fallback retained"
+    },
+    {
+      "source": "synthetic_demo.py",
+      "source_sha256": "64ed54efb9a8914d2e650b509df7ed10b16c6ac68171385ec707cb483297ed99",
+      "destination": "task_skills/calibration/synthetic_demo.py",
+      "destination_sha256": "3353eb51d8bc8d423d4de24db8c003f84743933d4c3eadd2d93ca7f303d19d71",
+      "change": "package-local module path; synthetic_only generation retained"
+    },
+    {
+      "source": "synthetic_table_demo.py",
+      "source_sha256": "cd01373241fed7d306147be506cf5527c90158f3f8a24e9fd63f5a7e6036404e",
+      "destination": "task_skills/calibration/synthetic_table_demo.py",
+      "destination_sha256": "37833d86c535f44f9f8e880d37ea834e7ae166a3bff776ab6c7aab0a8bd0fb89",
+      "change": "relative sibling imports; child scripts resolved inside the package; synthetic_only retained"
+    },
+    {
+      "source": "nova2_read_pose.py",
+      "source_sha256": "1c3560e9c62bf881d0eacad5f2a4dead1d8e5a9aa09321993ac1413e59a438a5",
+      "destination": "task_skills/calibration/nova2_read_pose.py",
+      "destination_sha256": "1c3560e9c62bf881d0eacad5f2a4dead1d8e5a9aa09321993ac1413e59a438a5",
+      "change": "unchanged; only the explicit GetPose() socket command is used"
+    },
+    {
+      "source": "templates/intrinsics.csv",
+      "source_sha256": "a3c72b6f1e35b2f675325e9582efc7c57ba644b09ea78a7e792837c8b22ee7fa",
+      "destination": "task_skills/calibration/templates/intrinsics.csv",
+      "destination_sha256": "a3c72b6f1e35b2f675325e9582efc7c57ba644b09ea78a7e792837c8b22ee7fa",
+      "change": "unchanged"
+    },
+    {
+      "source": "templates/teach_points_nova2.csv",
+      "source_sha256": "50d4a00365ae90e074dff5913e19587fa3e9335b54dd0c6a46a359dddd058201",
+      "destination": "task_skills/calibration/templates/teach_points_nova2.csv",
+      "destination_sha256": "50d4a00365ae90e074dff5913e19587fa3e9335b54dd0c6a46a359dddd058201",
+      "change": "unchanged"
+    },
+    {
+      "source": "templates/independent_plane_points.csv",
+      "source_sha256": "f14296057e612d31d8a644fafd4bca44359ceb4fec906f27e18d03fc736a44e1",
+      "destination": "task_skills/calibration/templates/independent_plane_points.csv",
+      "destination_sha256": "f14296057e612d31d8a644fafd4bca44359ceb4fec906f27e18d03fc736a44e1",
+      "change": "unchanged"
+    },
+    {
+      "source": "test_calibration.py",
+      "source_sha256": "fa2f4e4b7db34e7df555f5a9d57ad828bcbe75f92644db39e417d2789e7d6a7b",
+      "destination": "tests/test_calibration_geometry.py",
+      "destination_sha256": "3b0d334c46a5d3333ebe90fd947577510f3365f13878665e3c6650b727d204c2",
+      "change": "migrated to package imports together with test_table_calibration.py"
+    },
+    {
+      "source": "test_table_calibration.py",
+      "source_sha256": "67f2de6894a1d8f26133d5ed2b5d4dea7d768e5b1a586a6c57402d50cd5e78a2",
+      "destination": "tests/test_calibration_geometry.py",
+      "destination_sha256": "3b0d334c46a5d3333ebe90fd947577510f3365f13878665e3c6650b727d204c2",
+      "change": "migrated into the same 15-test package suite"
+    }
+  ]
+}
