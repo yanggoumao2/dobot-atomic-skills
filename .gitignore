@@ -25,3 +25,6 @@ task_skills/artifacts/
 *.swp
 *.swo
 .font-cache/
+
+# Real-robot command traces written at the repo root
+/run_*_[0-9]*.json
