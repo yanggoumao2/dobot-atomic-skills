@@ -168,7 +168,7 @@ class protocol_packet_handler(object):
                         break
 
                 if idx == 0:  # found at the beginning of the packet
-                    if (rxpacket[PKT_ID] > 0xFD) or (rxpacket[PKT_LENGTH] > RXPACKET_MAX_LEN) or (
+                    if (rxpacket[PKT_ID] > 0xFD) or not (2 <= rxpacket[PKT_LENGTH] <= RXPACKET_MAX_LEN) or (
                             rxpacket[PKT_ERROR] > 0x7F):
                         # unavailable ID or unavailable Length or unavailable Error
                         # remove the first byte in the packet
@@ -242,9 +242,19 @@ class protocol_packet_handler(object):
             self.portHandler.setPacketTimeout(6)  # HEADER0 HEADER1 ID LENGTH ERROR CHECKSUM
 
         # rx packet
+        expected_length = (txpacket[PKT_PARAMETER0 + 1] + 2
+                           if txpacket[PKT_INSTRUCTION] == INST_READ else 2)
         while True:
             rxpacket, result = self.rxPacket()
-            if result != COMM_SUCCESS or txpacket[PKT_ID] == rxpacket[PKT_ID]:
+            if result != COMM_SUCCESS:
+                break
+            if txpacket[PKT_ID] == rxpacket[PKT_ID]:
+                # An ACK for a preceding write has no read payload. Its ID
+                # and checksum can be valid, but it is not a position reply.
+                if rxpacket[PKT_ERROR] or rxpacket[PKT_LENGTH] == expected_length:
+                    break
+            if self.portHandler.isPacketTimeout():
+                result = COMM_RX_CORRUPT
                 break
 
         if result == COMM_SUCCESS and txpacket[PKT_ID] == rxpacket[PKT_ID]:
@@ -321,8 +331,10 @@ class protocol_packet_handler(object):
 
         if result == COMM_SUCCESS and rxpacket[PKT_ID] == scs_id:
             error = rxpacket[PKT_ERROR]
-
-            data.extend(rxpacket[PKT_PARAMETER0 : PKT_PARAMETER0+length])
+            if rxpacket[PKT_LENGTH] != length + 2 or len(rxpacket) != length + 6:
+                result = COMM_RX_CORRUPT
+            else:
+                data.extend(rxpacket[PKT_PARAMETER0 : PKT_PARAMETER0+length])
 
         return data, result, error
 
@@ -342,8 +354,10 @@ class protocol_packet_handler(object):
         rxpacket, result, error = self.txRxPacket(txpacket)
         if result == COMM_SUCCESS:
             error = rxpacket[PKT_ERROR]
-
-            data.extend(rxpacket[PKT_PARAMETER0 : PKT_PARAMETER0+length])
+            if rxpacket[PKT_LENGTH] != length + 2 or len(rxpacket) != length + 6:
+                result = COMM_RX_CORRUPT
+            else:
+                data.extend(rxpacket[PKT_PARAMETER0 : PKT_PARAMETER0+length])
 
         return data, result, error
 

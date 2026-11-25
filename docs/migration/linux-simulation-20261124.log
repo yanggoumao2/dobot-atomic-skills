@@ -1,0 +1,73 @@
+MODE: simulated Linux configuration/process/launcher branches; hardware mocked; host=win32
+in dobot robot
+in dobot robot
+in dobot robot
+in dobot robot
+gripper connected
+[GRIPPER START] GRIPPER_RIGHT ip=192.168.5.1 port=COM4 id=22
+[GRIPPER DONE] GRIPPER_RIGHT; next channel may now start
+in dobot robot
+in dobot robot
+in dobot robot
+in dobot robot
+gripper connected
+[GRIPPER START] GRIPPER_LEFT ip=192.168.5.2 port=COM3 id=21
+[GRIPPER DONE] GRIPPER_LEFT; next channel may now start
+Starting robot server on port 6001
+[POSE CHECK] reset waypoint 1 (read-only)
+  current_arm_deg = [90.0, 0.0, 90.0, 0.0, -90.0, -90.0, -90.0, 0.0, -90.0, 0.0, 90.0, 90.0]
+  target_arm_deg  = [90.0, 0.0, 90.0, 0.0, -90.0, -90.0, -90.0, 0.0, -90.0, 0.0, 90.0, 90.0]
+  delta_arm_deg   = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  gripper_current = [0.0, 0.0]
+  gripper_target  = [0.0, 0.0]
+  max_arm_delta_deg = 0.0
+  match_tolerance_deg = 0.1
+[POSE CHECK] reset waypoint 1 -> final
+  current_arm_deg = [90.0, 0.0, 90.0, 0.0, -90.0, -90.0, -90.0, 0.0, -90.0, 0.0, 90.0, 90.0]
+  target_arm_deg  = [90.0, 0.0, 90.0, 0.0, -90.0, -90.0, -90.0, 0.0, -90.0, 0.0, 90.0, 90.0]
+  delta_arm_deg   = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  gripper_current = [0.0, 0.0]
+  gripper_target  = [0.0, 0.0]
+  max_arm_delta_deg = 0.0
+  match_tolerance_deg = 0.1
+[SAFE POSE INIT] six-axis pose within 0.1 deg tolerance; no motion sent.
+[Warn]:The LEFT (.2) arm is out of the safe zone!
+warning, master port=COM5 comm failed: -3002
+warning, master port=COM5 comm failed: -3001
+camera thread init success: ['top'], 15 fps
+[RECORD] Enabled views: ['top']; output: E:\Dobot\datasets\dataset_package_test\collect_data
+[MAPPING] hand=0 HAND_LEFT COM=COM6 physical=unverified absolute_verified=True; hand=1 HAND_RIGHT COM=COM5 physical=unverified absolute_verified=True
+Waiting to connect the robot...
+If the robot fails to initialize successfully after 5 seconds,please check that the robot network is connected correctly and make sure TCP/IP mode is turned!
+robot init success....
+button thread init success...
+-------------------------Ok, let's start------------------------
+[TELEOP] absolute joint targets; align=0.15 rad/s, follow=3.2 rad/s, max_step=0.35 rad
+[TELEOP] master runaway limits: min_delta=0.25 rad, max_speed=12.5 rad/s
+warning, master port=COM5 comm failed: -3002
+[Warn]:The RIGHT (.1) arm is out of the safe zone!
+[Warn]:The LEFT (.2) arm is out of the safe zone!
+init 123
+init 123
+camera thread init success: ['top'], 15 fps
+[RECORD] Enabled views: ['top']; output: E:\Dobot\datasets\dataset_package_test\collect_data
+PASS: ['top']; requested=15fps; framesets=1; elapsed=0.000s
+PASS: ['top']; requested=15fps; framesets=1; elapsed=0.000s
+camera thread init success: ['top', 'left'], 15 fps
+[RECORD] Enabled views: ['top', 'left']; output: E:\Dobot\datasets\dataset_package_test\collect_data
+1: PASS, status=success, errors=0
+C:\Users\Lenovo\AppData\Local\Packages\openai.codex_2p2nqsd0c76g0\AC\#!sandbox.{4af107cc-7c54-4a74-91a3-d1018985a180}\Temp\tmpw1h9_kiu\preview.mp4
+{'model': '123', 'serial': '123', 'usb': '123'}
+[GRIPPER MOVE] target=0 speed=10
+[GRIPPER READ RETRY] ip=192.168.5.1 attempt=1/2
+[GRIPPER READ RETRY] ip=192.168.5.1 attempt=2/2
+[GRIPPER MOVE] target=0 speed=10
+[GRIPPER MOVE] target=0 speed=10
+[GRIPPER READ RETRY] ip=192.168.5.1 attempt=1/2
+[GRIPPER MOVE] target=255 speed=10
+****************************************************************************************************
+.................................................................................................................................................
+----------------------------------------------------------------------
+Ran 145 tests in 12.502s
+
+OK

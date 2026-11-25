@@ -1,104 +1,43 @@
-# Dobot 双臂原子技能编排
+# Nova2 双臂遥操与 ACT 示教训练
 
-基于越疆 X-Trainer / Nova 平台，将抓取、放置和等待组织为可执行的依赖图，提供真机适配器、执行记录和面向上游规划团队的 HTTP 执行网关。
+Windows / Linux 共享一套遥操、采集与数据处理代码。实体右臂 192.168.5.1、左臂 192.168.5.2；14 维数据顺序始终为右臂六关节+夹爪、左臂六关节+夹爪。
 
-当前链路：**上游生成执行图 → 网关校验 → 原子技能执行 → 状态查询与事件回传**。现场人工入口同时保留中文指令编排。
+- [Docker 镜像获取、离线测试与现场部署](manuals/DOCKER_LINUX.zh-CN.md)
+- **新研究人员从这里开始：[Linux 接线与操作手册](manuals/TELEOP_LINUX_SETUP.zh-CN.md)**
+- [项目结构、功能、数据与开发说明](docs/PROJECT_GUIDE.zh-CN.md)
+- [本次迁移变更及模拟测试结果](docs/migration/20261124-linux-migration.zh-CN.md)
+- [Windows 操作手册](TELEOP_WINDOWS_SETUP.zh-CN.md)、[ACT 数据采集说明](manuals/ACT_DEMONSTRATION_COLLECTION.zh-CN.md)
 
-## 已有功能
+## Linux 快速入口
 
-- 单臂 A/B 抓放、垂直接近与抬升、运输高度和归位流程。
-- 双臂依赖调度、等待、保持与返程；自然语言示例可编译为 43 个底层节点。
-- 外部执行包校验、每请求新执行的单次提交、面向自动重试的显式幂等提交、两阶段预检/提交、查询、事件和取消。
-- 持久幂等、设备所有权、场景版本及事件 outbox。
-- 控制器位姿/关节收敛、夹爪行程反馈、失败停止和执行日志。
+仓库建议放置 `/home/yxy/data/projects/dobot-teleop`。先按手册接线、安装依赖、填写配置并完成主手映射复核：
 
-外部合同使用 `RuntimeExecutionPackage 2.1`、`graph_version=0.1`、`dobot-dag/1`。目前支持 `embodied.pick@1.0.0`、`embodied.place@1.0.0`、`wait` 和 success AND 依赖；位置由本机场景标定解析。Mock 与 live 网关都允许左右臂独立技能并行，同臂动作须在依赖图中显式串行；跨臂并行不提供碰撞检测。
-
-## 本地单臂与双臂操作
-
-在仓库根目录运行，先预览执行图。以下命令不连接机械臂：
-
-```powershell
-# 左臂：A → 目标 A
-python -X utf8 -B -m task_skills.run_task "把物体A抓取放到目标A" --dry-run
-
-# 右臂：B → 目标 B
-python -X utf8 -B -m task_skills.run_task "把物体B抓取放到目标B" --dry-run
-
-# 双臂顺序执行：左臂完成后，再执行右臂
-python -X utf8 -B -m task_skills.run_task "把物体A抓取放到目标A，然后把物体B抓取放到目标B" --dry-run
-
-# 双臂协调：并行抓取、左臂保持 5 秒、放置后右臂取回 B
-$task = '用左臂把物体A拿起来，然后右臂把物体B拿起来。' +
-        '左臂拿起物体A以后保持5秒，右臂直接送到目标B。' +
-        '然后5s后左臂再把物体A送到目标A。' +
-        '随后右臂把物体B从目标B拿起来放回物体B原来的位置。'
-python -X utf8 -B -m task_skills.run_task "$task" --dry-run
+```bash
+bash scripts/linux/setup.sh
+source scripts/linux/activate.sh
+python -m tools.check_teleop_local --inventory
+# 终端 A：会使能两臂并初始化夹爪
+python -m experiments.launch_nodes
+# 另一个终端，重新 source 后：
+python -m experiments.run_control --show-img --project-name tube_insert_linux_v1
 ```
 
-真机执行使用已配置硬件依赖的 Windows 环境：完成现场检查后，去掉 `--dry-run`，核对打印的执行图，再按提示输入大写 `YES`。该入口直接使用设备适配器，不需要启动 HTTP 网关或 `launch_nodes.py`。固定绑定为左臂 A、右臂 B。
+网页控制台：`python -m tools.open_console`，地址 `http://127.0.0.1:8765`。Linux 使用 Bash/本机桌面终端，Windows 使用 PowerShell。配置通过 `DOBOT_CONFIG` 统一选择。Linux 模板的串口和相机序列号为空，机器人 IP 已填入原装置地址。
 
-[本地单臂与双臂操作说明](docs/local-control.md)包含完整真机命令、设备锁、初始场景、归位语义和结果文件说明。
+## 范围
 
-## 快速开始：Mock 联调
+保留主手按钮、绝对关节跟随、对齐与运动保护、夹爪、单/多相机预览、异步录制、ACT 质量检查/标注/HDF5 导出、训练/评估，以及 Windows ACT 实验工具。删除独立任务 DAG、中文任务解析、化学/烧杯任务和上游 HTTP 执行网关；详见迁移清单。
 
-使用 Python 3.10 或更新版本，在仓库根目录运行。HTTP Mock 网关只需 Python 标准库，无需机械臂或完整训练环境。
-
-```powershell
-git clone https://github.com/yanggoumao2/dobot-atomic-skills.git
-cd dobot-atomic-skills
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -B -m task_skills.run_gateway --mode mock --port 8080 --data-dir ./gateway-data/mock-demo
-```
-
-Linux 可使用 `python3 -m venv .venv`、`source .venv/bin/activate`。在另一个已激活同一环境的终端提交七节点示例：
-
-```powershell
-python -B -m task_skills.gateway.demo_client --output ./gateway-data/demo-request.json
-```
-
-两阶段提交使用 `--two-phase`；第一次演示会改变持久化逻辑场景，重复演示前按[接口说明](docs/execution-api/README.md)关闭网关并复位 mock 场景，或使用新的 mock 数据目录。
+2026-11-25：[完整流程与 Docker 发布](docs/migration/20261125-linux-docker-release.zh-CN.md)已通过，Linux 容器160项通过、7项Windows专属跳过，并完成合成数据全流程。
 
 ## 离线验证
 
-```powershell
-python -B -m unittest discover -s tests -p test_execution_gateway.py -q
-python -B -m unittest discover -s tests -p test_atomic_runner_unittest.py -q
+```bash
+python tools/simulate_linux.py
 ```
 
-遥操作回归还需要 NumPy（安装到项目虚拟环境）：
+2026-11-24 已在 Windows 上完成一次 Linux 分支模拟及共享逻辑回归：145 项通过。Linux 分支采用临时 `/dev` 配置、模拟 `/proc` 和设备替身；测试报告说明覆盖范围。
 
-```powershell
-python -m pip install numpy
-python -B -m unittest discover -s tests -p test_teleop_regressions.py -q
-python -B tests/gateway_cli_smoke.py --output ./gateway-data/cli-smoke
-```
+## 来源
 
-`requirements.txt` 保留 X-Trainer 原始完整环境依赖，包含相机、仿真与训练相关组件；Mock 联调无需安装该列表。
-
-## 文档与入口
-
-| 内容 | 位置 |
-| --- | --- |
-| 当前 HTTP 合同、双方操作、幂等与现场恢复 | [docs/execution-api/README.md](docs/execution-api/README.md) |
-| 原子技能执行接口与联调手册（14 页 PDF） | [联调手册 v1.1](docs/execution-api/Dobot_原子技能执行接口与联调手册_v1.1.pdf) |
-| 外部运行包示例 | [runtime-package.example.json](docs/execution-api/runtime-package.example.json) |
-| 受限 profile Schema | [runtime-package.profile.schema.json](docs/execution-api/runtime-package.profile.schema.json) |
-| 中文指令与底层执行图 | [task_skills/README.md](task_skills/README.md) |
-| HTTP 网关 | `python -m task_skills.run_gateway` |
-| 指令预览 | `python -m task_skills.run_task "把物体A抓取放到目标A" --dry-run` |
-| 场景配置 | `task_skills/scene_config.json` |
-| 控制与串口配置 | `dobot_control/`、`scripts/dobot_config/dobot_settings.ini` |
-
-## 真机与验证记录
-
-2026-09-25，单臂 A、单臂 B 和双臂 43 节点保持/返程任务已完成控制器执行，并由现场操作者确认实际抓取、转运、放置与松爪。10 月新增 HTTP 网关完成离线与 Mock 验证，真实上游联调及网关真机验收待做。执行文件的证据等级仍为 `command_trace`，物理成功依赖现场或独立传感器确认。
-
-配置中的场景坐标、Tool 0、左右臂与夹爪绑定来自当前装置，移植时须重新标定。本装置夹爪约定为 **0 = 夹紧，255 = 张开**。Windows 真机入口要求显式 live 参数、现场令牌、场景复位及设备锁；具体步骤见接口说明。配置文件不含本机口令，`COMPUTER.passcode` 已替换为占位符；旧 Linux 串口权限工具如需使用，须在本地配置。访问令牌通过环境变量注入。
-
-## 源码范围与来源
-
-本仓库以 2026-10-12 工作镜像为来源，包含截至 10 月 5 日的执行网关改动、原子技能、相关底层控制、遥操作/采集支撑模块、SDK 和测试。上传目录为独立快照；模型训练目录、模型权重、数据集、现场运行日志、数据库、缓存及原 Git 历史未纳入。
-
-基础控制工程来自 Dobot X-Trainer，原始说明见 [Dobot README](docs/upstream/README.dobot.md)。保留 [LICENSE](LICENSE)、[第三方说明](THIRD-PARTY-LICENSES)及 SDK 各自许可证。
+基础代码来自 Dobot X-Trainer，参见 [原始说明](docs/upstream/README.dobot.md)、[LICENSE](LICENSE)、[第三方许可](THIRD-PARTY-LICENSES)。Nova V3 TCP/IP 参考 [越疆官方 SDK](https://github.com/Dobot-Arm/TCP-IP-Python-V3)。

@@ -1,0 +1,16 @@
+.git
+.local
+**/__pycache__
+**/.pytest_cache
+.venv*
+config/*.local.ini
+**/artifacts
+**/logs
+*.zip
+*.tar
+*.tar.gz
+*.pt
+*.pth
+*.ckpt
+*.hdf5
+*.h5

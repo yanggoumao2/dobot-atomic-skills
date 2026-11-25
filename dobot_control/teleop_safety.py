@@ -4,6 +4,15 @@ from typing import List
 
 import numpy as np
 
+# 2026-11-02 onsite labels supplied by the operator:
+# code "left" = .1 = physical right: toward operator is +X;
+# code "right" = .2 = physical left: toward operator is -X.
+# Translate each original X interval by 150 mm without changing its width.
+# Restore original Y bounds after correcting the earlier axis assumption.
+WORKSPACE_X_RANGES_MM = {"left": (-300, 450), "right": (-400, 300)}
+WORKSPACE_Y_RANGE_MM = (-750, -160)
+WORKSPACE_Z_MIN_MM = 40
+
 
 def is_within_safe_position(position, x_range, y_range, z_min):
     return (
@@ -11,6 +20,11 @@ def is_within_safe_position(position, x_range, y_range, z_min):
         and y_range[0] <= position[1] <= y_range[1]
         and position[2] > z_min
     )
+
+
+def is_within_workspace(position_mm, side):
+    return is_within_safe_position(position_mm, WORKSPACE_X_RANGES_MM[side],
+                                   WORKSPACE_Y_RANGE_MM, WORKSPACE_Z_MIN_MM)
 
 
 def check_pose_protection(positions, velocities, nova_flags):
@@ -23,31 +37,26 @@ def check_pose_protection(positions, velocities, nova_flags):
     warnings = []
     positions_mm = {key: value * 1000 for key, value in positions.items()}
     sides = (
-        ("left", bool(flags[0]), (-450, 300)),
-        ("right", bool(flags[1]), (-250, 450)),
+        ("left", bool(flags[0])),
+        ("right", bool(flags[1])),
     )
-    y_range = (-750, -160)
 
-    for side, active, x_range in sides:
+    for side, active in sides:
         if not active:
             continue
+        physical_side = "RIGHT (.1)" if side == "left" else "LEFT (.2)"
         tip_names = (f"{side}_left", f"{side}_right")
         if any(velocities[name][2] < -1 for name in tip_names):
             warnings.append(
-                f"[Warn]:The {side} robot speed of the TCP is moving too fast!"
+                f"[Warn]:The {physical_side} robot speed of the TCP is moving too fast!"
             )
             warnings.append(f"delta_{tip_names[0]}: {velocities[tip_names[0]][2]}")
             protected = True
         if not all(
-            is_within_safe_position(
-                positions_mm[name],
-                x_range,
-                y_range,
-                40,
-            )
+            is_within_workspace(positions_mm[name], side)
             for name in tip_names
         ):
-            warnings.append(f"[Warn]:The {side} arm is out of the safe zone!")
+            warnings.append(f"[Warn]:The {physical_side} arm is out of the safe zone!")
             protected = True
 
     for warning in warnings:

@@ -1,5 +1,6 @@
 import socket
 import threading
+import time
 from tkinter import Text, END
 import datetime
 import numpy as np
@@ -137,6 +138,8 @@ class DobotApi:
         self.port = port
         self.socket_dobot = 0
         self.__globalLock = threading.Lock()
+        self._dashboard_reply_buffer = bytearray()
+        self._dashboard_protocol_failed = False
         self.text_log: Text = None
         if args:
             self.text_log = args[0]
@@ -162,7 +165,10 @@ class DobotApi:
 
     def send_data(self, string):
         # self.log(f"Send to {self.ip}:{self.port}: {string}")
-        self.socket_dobot.send(str.encode(string, 'utf-8'))
+        if self.port == 29999:
+            self.socket_dobot.sendall(str.encode(string, 'utf-8'))
+        else:
+            self.socket_dobot.send(str.encode(string, 'utf-8'))
         # try:
         #     self.socket_dobot.send(str.encode(string, 'utf-8'))
         # except Exception as e:
@@ -176,6 +182,8 @@ class DobotApi:
         """
         Read the return value
         """
+        if self.port == 29999:
+            return self._wait_dashboard_reply()
         data = ""
         try:
             data = self.socket_dobot.recv(1024)
@@ -195,11 +203,42 @@ class DobotApi:
             # self.log(f'Receive from {self.ip}:{self.port}: {data_str}')
             return data_str
 
+    def _wait_dashboard_reply(self):
+        # TCP recv boundaries are not Dashboard reply boundaries. Preserve
+        # bytes after the semicolon for the next complete frame.
+        timeout = self.socket_dobot.gettimeout()
+        deadline = time.monotonic() + (timeout if timeout is not None else 3.0)
+        try:
+            while True:
+                end = self._dashboard_reply_buffer.find(b';')
+                if end >= 0:
+                    frame = bytes(self._dashboard_reply_buffer[:end + 1])
+                    del self._dashboard_reply_buffer[:end + 1]
+                    return frame.decode('utf-8')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('incomplete Dashboard reply')
+                self.socket_dobot.settimeout(remaining)
+                chunk = self.socket_dobot.recv(1024)
+                if not chunk:
+                    raise ConnectionError('Dashboard connection closed')
+                self._dashboard_reply_buffer.extend(chunk)
+                if len(self._dashboard_reply_buffer) > 65536:
+                    raise ValueError('Dashboard reply exceeds 64 KiB')
+        except Exception as exc:
+            self._dashboard_protocol_failed = True
+            partial = bytes(self._dashboard_reply_buffer)
+            raise RuntimeError(f'{self.ip}:29999 Dashboard receive failed: {exc}; partial={partial!r}') from exc
+        finally:
+            self.socket_dobot.settimeout(timeout)
+
     def sendRecvMsg(self, string):
         """
         send-recv Sync
         """
         with self.__globalLock:
+            if self.port == 29999 and self._dashboard_protocol_failed:
+                raise RuntimeError(f'{self.ip}:29999 Dashboard stream invalid after receive failure; reconnect required')
             self.send_data(string)
             recvData = self.wait_reply()
             return recvData

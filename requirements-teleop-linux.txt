@@ -1,0 +1,9 @@
+# Python 3.10, independent from the ACT training environment.
+numpy==1.26.4
+opencv-python==4.10.0.84
+tyro==0.8.8
+pyserial==3.5
+pyzmq>=26,<28
+requests>=2.32.5,<3
+pyrealsense2>=2.56,<3
+h5py==3.12.1

@@ -1,0 +1,38 @@
+services:
+  teleop:
+    profiles: [hardware]
+    image: dobot-teleop:linux
+    build: .
+    network_mode: host
+    pid: host
+    hostname: ${DOBOT_HOSTNAME:?Set DOBOT_HOSTNAME to the Linux host hostname}
+    user: "${UID_LOCAL:?Set UID_LOCAL}:${GID_LOCAL:?Set GID_LOCAL}"
+    group_add:
+      - "${DIALOUT_GID:?Set DIALOUT_GID}"
+    environment:
+      DISPLAY: ${DISPLAY:?Use an on-site X11/XWayland desktop}
+      XAUTHORITY: /tmp/dobot.xauth
+      DOBOT_CONFIG: /workspace/dobot-teleop/config/linux.local.ini
+      DOBOT_DEVICE_LOCK_PATH: /workspace/.local/runtime/device-owner
+      DOBOT_ACT_RECORDING: "1"
+      HOME: /tmp
+    devices:
+      - "${HAND_LEFT_DEVICE:?Set HAND_LEFT_DEVICE}:/dev/dobot-hand-left"
+      - "${HAND_RIGHT_DEVICE:?Set HAND_RIGHT_DEVICE}:/dev/dobot-hand-right"
+      - "${GRIPPER_LEFT_DEVICE:?Set GRIPPER_LEFT_DEVICE}:/dev/dobot-gripper-left"
+      - "${GRIPPER_RIGHT_DEVICE:?Set GRIPPER_RIGHT_DEVICE}:/dev/dobot-gripper-right"
+    device_cgroup_rules:
+      - 'c 189:* rmw'
+    volumes:
+      - ./config/linux.local.ini:/workspace/dobot-teleop/config/linux.local.ini:ro
+      - ../datasets:/workspace/datasets
+      - ../.local/runtime:/workspace/.local/runtime
+      - ./.local:/workspace/dobot-teleop/.local
+      - ./scripts/logs:/workspace/dobot-teleop/scripts/logs
+      - /dev/bus/usb:/dev/bus/usb
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - ${XAUTHORITY:?Set XAUTHORITY to your desktop authority file}:/tmp/dobot.xauth:ro
+    working_dir: /workspace/dobot-teleop
+    command: ["python", "-m", "tools.local_console", "--no-browser"]
+    stop_grace_period: 30s
+    init: true

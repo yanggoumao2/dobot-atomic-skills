@@ -30,6 +30,8 @@ class ZMQServerRobot:
         self._timout_message = f"Timeout in Robot Server, Robot: {robot}"
         self._socket.bind(addr)
         self._stop_event = threading.Event()
+        from dobot_control.act_session import ACTSession
+        self._act_session = ACTSession()
 
         self.ON = 1
         self.OFF = 0
@@ -51,13 +53,22 @@ class ZMQServerRobot:
                 method = request.get("method")
                 args = request.get("args", {})
                 result: Any
-                if method == "num_dofs":
+                if method == 'begin_act_control':
+                    result = self._act_session.begin()
+                elif method == 'end_act_control':
+                    result = self._act_session.end(args.get('token'))
+                elif method == 'act_protocol':
+                    result = {'protocol': 1, 'owned': self._act_session.token is not None}
+                elif method == 'recover_gripper':
+                    result = self.recover_gripper(**args)
+                elif method == "num_dofs":
                     result = self._robot.num_dofs()
                 elif method == "get_joint_state":
                     # log_write(str(self.port) + ": get_joint_state start")
                     result = self._robot.get_joint_state()
                     # log_write(str(self.port) + ": get_joint_state end")
                 elif method == "command_joint_state":
+                    args = self._act_session.authorize(method, args)
                     tic = time.time()
                     toc = time.time()
                     # log_write(str(self.port) + ": command_joint_state start")
@@ -66,6 +77,7 @@ class ZMQServerRobot:
                 elif method == "get_observations":
                     result = self._robot.get_observations()
                 elif method == "set_do_status":
+                    args = self._act_session.authorize(method, args)
                     result = self._robot.set_do_status(**args)
                 elif method == "get_XYZrxryrz_state":
                     result = self._robot.get_XYZrxryrz_state()
@@ -86,6 +98,12 @@ class ZMQServerRobot:
                     self._socket.send(pickle.dumps({"__robot_rpc_error__": error}))
                 except zmq.ZMQError as send_exc:
                     print(f"Failed to return robot RPC error: {send_exc}", flush=True)
+
+    def recover_gripper(self, side, action):
+        if self._act_session.token is not None:
+            raise RuntimeError('ACT 执行程序正在占用控制权，请先正常退出该程序，再恢复夹爪')
+        from dobot_control.gripper_recovery import recover_gripper
+        return recover_gripper(self._robot, side, action)
 
     def stop(self) -> None:
         """Signal the server to stop serving."""

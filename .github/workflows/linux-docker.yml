@@ -1,0 +1,34 @@
+name: Linux Docker release
+on:
+  push:
+    branches: [linux]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-test-package:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Python 3.10 Linux image
+        run: docker build -t dobot-teleop:linux .
+      - name: Container startup probe
+        run: timeout 45 docker run --rm --entrypoint python dobot-teleop:linux -c "import sys; print(sys.version, flush=True)"
+      - name: Offline regression and complete data workflow
+        run: |
+          set -o pipefail
+          timeout 300 docker run --rm dobot-teleop:linux 2>&1 | tee linux-container-test.log
+      - name: Export image
+        run: docker save dobot-teleop:linux | gzip > dobot-teleop-linux-amd64.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-container-test-log
+          path: linux-container-test.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dobot-teleop-linux-amd64
+          path: dobot-teleop-linux-amd64.tar.gz
+          compression-level: 0
+          retention-days: 30

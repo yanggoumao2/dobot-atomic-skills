@@ -1,0 +1,7 @@
+# Install torch/torchvision from the CUDA 12.8 index first for this RTX5060 laptop.
+# python -m pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
+numpy==1.26.4
+h5py==3.12.1
+ipython==8.30.0
+einops==0.8.0
+packaging==24.2

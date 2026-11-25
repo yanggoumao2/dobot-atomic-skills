@@ -1,3 +1,4 @@
+from dobot_control.config import config_path as get_config_path
 import os
 from dataclasses import dataclass
 from typing import Dict, Optional, Sequence, Tuple
@@ -69,6 +70,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    ini_file_path = os.path.dirname(__file__).replace("dobot_control/agents", '')+"scripts/dobot_config/dobot_settings.ini"
+    ini_file_path = str(get_config_path())
     ini_file = configparser.ConfigParser()
     ini_file.read(ini_file_path)

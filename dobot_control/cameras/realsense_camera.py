@@ -22,7 +22,8 @@ class RealSenseCamera(CameraDriver):
     def __repr__(self) -> str:
         return f"RealSenseCamera(device_id={self._device_id})"
 
-    def __init__(self, device_id: Optional[str] = None, flip: bool = False):
+    def __init__(self, device_id: Optional[str] = None, flip: bool = False, fps: int = 90,
+                 enable_depth: bool = True):
         import pyrealsense2 as rs
         print("init", device_id)
         self._device_id = device_id
@@ -30,18 +31,30 @@ class RealSenseCamera(CameraDriver):
         config = rs.config()
         config.enable_device(device_id)
 
-        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 90)
-        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 90)
+        self._enable_depth = enable_depth
+        if enable_depth:
+            config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, fps)
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, fps)
         self._pipeline.start(config)
+        self._started = True
         self._flip = flip
         # print(device_id)
-        for _ in range(50):
-            self.read()
+        try:
+            for _ in range(50):
+                self.read()
+        except Exception:
+            self.close()
+            raise
+
+    def close(self):
+        if self._started:
+            self._pipeline.stop()
+            self._started = False
 
     def read(
         self,
         img_size: Optional[Tuple[int, int]] = None,  # farthest: float = 0.12
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """Read a frame from the camera.
 
         Args:
@@ -50,27 +63,30 @@ class RealSenseCamera(CameraDriver):
 
         Returns:
             np.ndarray: The color image, shape=(H, W, 3)
-            np.ndarray: The depth image, shape=(H, W, 1)
+            Optional[np.ndarray]: Depth (H, W, 1), or None when disabled.
         """
 
         frames = self._pipeline.wait_for_frames()
         color_frame = frames.get_color_frame()
         color_image = np.asanyarray(color_frame.get_data())
-        depth_frame = frames.get_depth_frame()
-        depth_image = np.asanyarray(depth_frame.get_data())
+        depth_image = None
+        if getattr(self, '_enable_depth', True):
+            depth_frame = frames.get_depth_frame()
+            depth_image = np.asanyarray(depth_frame.get_data())
         # depth_image = cv2.convertScaleAbs(depth_image, alpha=0.03)
         if img_size is None:
             image = color_image[:, :, ::-1]
             depth = depth_image
         else:
             image = cv2.resize(color_image, img_size)[:, :, ::-1]
-            depth = cv2.resize(depth_image, img_size)
+            depth = cv2.resize(depth_image, img_size) if depth_image is not None else None
 
         # rotate 180 degree's because everything is upside down in order to center the camera
         if self._flip:
             image = cv2.rotate(image, cv2.ROTATE_180)
-            depth = cv2.rotate(depth, cv2.ROTATE_180)[:, :, None]
-        else:
+            if depth is not None:
+                depth = cv2.rotate(depth, cv2.ROTATE_180)[:, :, None]
+        elif depth is not None:
             depth = depth[:, :, None]
 
         return image, depth

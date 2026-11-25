@@ -1,0 +1,3 @@
+# Conversion only; no training or inference framework.
+-r requirements-teleop-windows.txt
+h5py==3.12.1

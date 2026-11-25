@@ -88,6 +88,8 @@ class RobotEnv:
         observations["joint_velocities"] = robot_obs["joint_velocities"]
         observations["ee_pos_quat"] = robot_obs["ee_pos_quat"]
         observations["gripper_position"] = robot_obs["gripper_position"]
+        observations.update({k: v for k, v in robot_obs.items()
+                             if k.startswith("_act_") or k == "dataset_joint_positions"})
         return observations
 
     def set_do_status(self, which_do):

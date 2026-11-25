@@ -113,8 +113,14 @@ class DynamixelDriver(DynamixelDriverProtocol):
         self._append_id = append_id
         self.using_sensor = using_sensor
         self._joint_angles = None
-        self._joint_keys = np.zeros(3)  # add 2 keys
+        self._joint_keys = None  # no synthetic button state before first valid reply
+        self._keys_updated_at = None
+        self._joints_updated_at = None
+        self._reader_error = None
         self._lock = Lock()
+        # Serial transactions must be exclusive, but reading cached state
+        # must not wait behind a timed-out bus transaction.
+        self._state_lock = Lock()
 
         # Initialize the port handler, packet handler, and group sync read/write
         self._portHandler = PortHandler(port)
@@ -155,32 +161,42 @@ class DynamixelDriver(DynamixelDriverProtocol):
         self._start_reading_thread()
 
     def _internal_getKey(self):
+        # The bundled SDK clearPort() only flushes OUTPUT. Discard unread
+        # status tails before switching from Dynamixel to the button protocol.
+        self._portHandler.ser.reset_input_buffer()
         txBuf = [0xAA, 0x55, 0xAA]
         self._portHandler.writePort(txBuf)
-        self._portHandler.setPacketTimeout(2)
         rxpacket = []
         if self.using_sensor:
             waitLen = 4
         else:
             waitLen = 2
+        self._portHandler.setPacketTimeout(waitLen)
         while True:
-            rxpacket.extend(self._portHandler.readPort(2))
+            chunk = self._portHandler.readPort(waitLen - len(rxpacket))
+            rxpacket.extend(chunk)
             rx_length = len(rxpacket)
             if rx_length >= waitLen:
                 break
             if self._portHandler.isPacketTimeout():
                 break
+            if not chunk:
+                time.sleep(0.001)
+        if len(rxpacket) != waitLen:
+            return None
         if self.using_sensor:
             flag_in = ((rxpacket[0] + rxpacket[1] + rxpacket[2] + rxpacket[3]) == 255*2 )
         else:
             flag_in = len(rxpacket) == waitLen and rxpacket[0] | rxpacket[1] == 0xff and rxpacket[0] & rxpacket[1] == 0x00
         if flag_in:
+            if (rxpacket[0] >> 4) not in (0, 1) or (rxpacket[0] & 15) not in (0, 1):
+                return None
             if self.using_sensor:
                 return [(rxpacket[0] >> 4) & 0b1111, rxpacket[0] & 0b00001111, rxpacket[2]]
             else:
                 return [(rxpacket[0] >> 4) & 0b1111, rxpacket[0] & 0b00001111, 0]
 
-        return []
+        return None
 
     def set_joints(self, joint_angles: Sequence[float]):
         if len(joint_angles) != len(self._ids):
@@ -245,43 +261,57 @@ class DynamixelDriver(DynamixelDriverProtocol):
         self._reading_thread.start()
 
     def _read_joint_angles(self):
-        # Continuously read joint angles and update the joint_angles array
-        while not self._stop_thread.is_set():
-            time.sleep(0.001)
-            with self._lock:
-                _joint_angles = np.zeros(len(self._ids), dtype=int)
-                # print("aaaa: ", self._ids)
-                dxl_comm_result = self._groupSyncRead.txRxPacket()
-                if dxl_comm_result != COMM_SUCCESS:
-                    print(f"warning, comm failed: {dxl_comm_result}")
-                    continue
-                for i, dxl_id in enumerate(self._ids):
-                    if self._groupSyncRead.isAvailable(
-                        dxl_id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION
-                    ):
-                        angle = self._groupSyncRead.getData(
-                            dxl_id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION
-                        )
-                        angle = np.int32(np.uint32(angle))
-                        _joint_angles[i] = angle
-                    else:
-                        raise RuntimeError(
-                            f"Failed to get joint angles for Dynamixel with ID {dxl_id}"
-                        )
-                self._joint_angles = _joint_angles
-                keys = self._internal_getKey()
-                if keys is not None:
+        try:
+            while not self._stop_thread.wait(0.001):
+                self._read_state_once()
+        except Exception as exc:
+            with self._state_lock:
+                self._reader_error = f"{type(exc).__name__}: {exc}"
+
+    def _read_state_once(self):
+        with self._lock:
+            # Also discard incomplete button replies before the next SDK read.
+            self._portHandler.ser.reset_input_buffer()
+            result = self._groupSyncRead.txRxPacket()
+            if result == COMM_SUCCESS:
+                angles = []
+                for dxl_id in self._ids:
+                    if not self._groupSyncRead.isAvailable(
+                            dxl_id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION):
+                        break
+                    raw = self._groupSyncRead.getData(
+                        dxl_id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION)
+                    angles.append(int(np.int32(np.uint32(raw))))
+                # Never refresh the timestamp of a partial/failed joint read.
+                if len(angles) == len(self._ids):
+                    with self._state_lock:
+                        self._joint_angles = np.asarray(angles, dtype=int)
+                        self._joints_updated_at = time.monotonic()
+            else:
+                print(f"warning, master port={self._portHandler.getPortName()} comm failed: {result}")
+            # A failed joint read must not starve the independent button query.
+            keys = self._internal_getKey()
+            if keys is not None:
+                with self._state_lock:
                     self._joint_keys = keys
-            # self._groupSyncRead.clearParam() # TODO what does this do? should i add it
+                    self._keys_updated_at = time.monotonic()
 
     def get_joints(self) -> np.ndarray:
-        # Return a copy of the joint_angles array to avoid race conditions
-        while self._joint_angles is None:
-            time.sleep(0.1)
-        with self._lock:
-            _j = self._joint_angles.copy()
-        # print(_j, self._ids)
-        return _j / 2048.0 * np.pi
+        deadline = time.monotonic() + 1.0
+        while True:
+            if not self._reading_thread.is_alive():
+                raise RuntimeError(f"Master serial reader stopped: {self._reader_error}")
+            with self._state_lock:
+                joints = None if self._joint_angles is None else self._joint_angles.copy()
+                updated_at = self._joints_updated_at
+            now = time.monotonic()
+            if joints is not None:
+                if updated_at is None or now - updated_at > 0.25:
+                    raise RuntimeError("Master joint state stale for more than 250 ms")
+                return joints / 2048.0 * np.pi
+            if now >= deadline:
+                raise RuntimeError("No valid master joint reply within 1 second")
+            time.sleep(0.01)
 
     def close(self):
         self._stop_thread.set()
@@ -289,13 +319,25 @@ class DynamixelDriver(DynamixelDriverProtocol):
         self._portHandler.closePort()
 
     def get_keys(self) -> np.ndarray:
-        # Return a copy of the joint_angles array to avoid race conditions
-        while self._joint_keys is None:
+        # A short invalid packet must not overwrite a valid three-field state.
+        # Nor may a disconnected hand leave an old "servo on" state forever.
+        deadline = time.monotonic() + 1.0
+        while True:
+            if not self._reading_thread.is_alive():
+                raise RuntimeError(f"Master serial reader stopped; button state unavailable: {self._reader_error}")
+            with self._state_lock:
+                key = None if self._joint_keys is None else np.asarray(self._joint_keys).copy()
+                updated_at = self._keys_updated_at
+            now = time.monotonic()
+            if key is not None:
+                if key.shape != (3,) or not np.isfinite(key).all():
+                    raise RuntimeError("Invalid master button state: expected three finite values")
+                if updated_at is None or now - updated_at > 0.25:
+                    raise RuntimeError("Master button state stale for more than 250 ms")
+                return key
+            if now >= deadline:
+                raise RuntimeError("No valid master button reply within 1 second")
             time.sleep(0.01)
-        with self._lock:
-            key = self._joint_keys.copy()
-        # log_write(__file__, "ButtonA: ["+str(key)+"] unlock")
-        return key
 
     # set p
     def set_joint_arg_2Byte(self, _id, addr, val):

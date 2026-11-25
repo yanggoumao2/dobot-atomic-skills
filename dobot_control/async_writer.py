@@ -12,7 +12,10 @@ class BoundedAsyncWriter:
         if max_queue_size <= 0:
             raise ValueError("max_queue_size must be positive")
         self._write_item = write_item
-        self._queue = queue.Queue(maxsize=max_queue_size)
+        self._queue = queue.Queue()
+        # Only samples consume capacity. Tiny finalization records share FIFO
+        # order but cannot be dropped behind a full sample backlog.
+        self._sample_slots = threading.BoundedSemaphore(max_queue_size)
         self._failure = None
         self._failure_lock = threading.Lock()
         self._closed = False
@@ -21,25 +24,29 @@ class BoundedAsyncWriter:
         self._thread.start()
 
     def submit(self, item) -> bool:
-        if self._closed:
-            raise RuntimeError("async writer is closed")
-        self.raise_if_failed()
-        try:
-            self._queue.put_nowait(item)
-        except queue.Full:
-            self.dropped_count += 1
-            return False
-        return True
+        return self.submit_factory(lambda: item)
 
     def submit_factory(self, make_item) -> bool:
-        """Build an item only when the bounded queue currently has room."""
         if self._closed:
             raise RuntimeError("async writer is closed")
         self.raise_if_failed()
-        if self._queue.full():
+        if not self._sample_slots.acquire(blocking=False):
             self.dropped_count += 1
             return False
-        return self.submit(make_item())
+        try:
+            item = make_item()
+            self._queue.put_nowait((False, item))
+        except BaseException:
+            self._sample_slots.release()
+            raise
+        return True
+
+    def submit_final(self, item) -> bool:
+        if self._closed:
+            raise RuntimeError("async writer is closed")
+        self.raise_if_failed()
+        self._queue.put_nowait((True, item))
+        return True
 
     def raise_if_failed(self) -> None:
         with self._failure_lock:
@@ -51,24 +58,17 @@ class BoundedAsyncWriter:
         if self._closed:
             return
         self._closed = True
-        deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("timed out while closing async writer")
-            try:
-                self._queue.put(self._STOP, timeout=min(0.05, remaining))
-                break
-            except queue.Full:
-                continue
-        self._thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        self._queue.put_nowait((True, self._STOP))
+        self._thread.join(timeout=timeout)
         if self._thread.is_alive():
             raise TimeoutError("timed out while closing async writer")
         self.raise_if_failed()
 
     def _run(self) -> None:
         while True:
-            item = self._queue.get()
+            critical, item = self._queue.get()
+            if not critical:
+                self._sample_slots.release()
             try:
                 if item is self._STOP:
                     return

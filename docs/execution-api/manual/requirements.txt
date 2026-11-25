@@ -1,2 +1,0 @@
-reportlab>=4.0,<5
-fonttools>=4.50,<5

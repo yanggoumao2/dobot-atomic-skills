@@ -16,39 +16,21 @@ def time_print(st):
           str(st))
 
 def free_limit_and_set_one(file_name):
-    ini_file_path = str(Path(__file__).parent) + "/dobot_config/dobot_settings.ini"
-    ini_file = configparser.ConfigParser()
-    ini_file.read(ini_file_path)
-    computer_passwd = ini_file.get("COMPUTER", "passcode")
-    comd = f"echo {computer_passwd} | sudo -S chmod 777 {file_name}"
-    subprocess.run(comd, shell=True)
-    with open(file_name, "w+") as f:
-        f.write(str(1))
+    """Optional FTDI tuning. Permissions belong to the system administrator."""
+    import warnings
+    path = Path(file_name)
+    if not path.exists():
+        return
+    try:
+        if path.read_text().strip() != "1":
+            path.write_text("1")
+    except OSError as exc:
+        warnings.warn(f"FTDI latency unchanged ({path}): {exc}; configure udev permissions")
 
 
-# scan_port
 def scan_port():
-    ports = list(serial_stl.comports())
-    if os.name == "nt":
-        # Exclude virtual serial ports such as Bluetooth; Windows does not need chmod.
-        return [port.device for port in ports if port.vid is not None]
+    return [p.device for p in serial_stl.comports() if p.vid is not None]
 
-    ini_file_path = str(Path(__file__).parent) + "/dobot_config/dobot_settings.ini"
-    ini_file = configparser.ConfigParser()
-    ini_file.read(ini_file_path)
-
-    com_list = []
-    for i in ports:
-        if "USB" in i.device:
-            com_list.append(i.device)
-        if "ACM" in i.device:
-            com_list.append(i.device)
-    for _port in com_list:
-        computer_passwd = ini_file.get("COMPUTER", "passcode")
-        comd = f"echo {computer_passwd} | sudo -S chmod 777 {_port}"
-        subprocess.run(comd, shell=True)
-    # print(com_list)
-    return com_list
 
 # make new dir
 def mk_dir(path_dir):

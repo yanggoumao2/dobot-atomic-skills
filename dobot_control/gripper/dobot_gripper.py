@@ -1,4 +1,5 @@
-# gripper for hapatics2 
+# gripper for hapatics2
+from functools import wraps
 import threading
 import time
 import struct
@@ -19,9 +20,21 @@ sys.path.append(BASE_DIR)
 from third_party.feetech.scservo_sdk import *
 
 
+class GripperReadTimeout(ValueError):
+    """No position reply was received within the serial packet timeout."""
+
+
 def deal_hex_send_data(send_data):
     r_send_data = struct.pack("%dB" % (len(send_data)), *send_data)
     return r_send_data
+
+
+def serial_transaction(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self.command_lock:
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 class DobotGripper:
@@ -36,7 +49,7 @@ class DobotGripper:
                                                     protocol_end=0)  # SCServo bit end(STS/SMS=0, SCS=1)
         # self._packHandler.write2ByteTxRx()
         self.servo = sms_sts(self._portHandler)
-        self.command_lock = threading.Lock()
+        self.command_lock = threading.RLock()
         self._min_position = 0  # 对外的最小位置
         self._max_position = 255  # 对外的最大位置
         self._min_speed = 0  # 对外的最小速度
@@ -63,11 +76,11 @@ class DobotGripper:
     def set_latency_timer(self):
         if os.name == "nt":
             return
-        _port_name = self.port.split("/")[-1]
+        _port_name = os.path.basename(os.path.realpath(self.port))
         free_limit_and_set_one(f"/sys/bus/usb-serial/devices/{_port_name}/latency_timer")
 
     def ping(self) -> None:
-        """Connects to a gripper at the given address.       
+        """Connects to a gripper at the given address.
         :param port: usb com port  eg: /dev/ttyUSB0
         :param timeout: Timeout for blocking
         """
@@ -94,7 +107,7 @@ class DobotGripper:
         self._portHandler = None
         self._packHandler = None
         self.servo = None
-        # self.socket.close()    
+        # self.socket.close()
 
     def get_min_position(self) -> int:
         """Returns the minimum position the gripper can reach (open position)."""
@@ -121,6 +134,7 @@ class DobotGripper:
         return self.get_current_position() >= self.get_closed_position()
 
     # dobot
+    @serial_transaction
     def get_current_position(self) -> int:
         """Returns the current position as returned by the physical hardware."""
         position, result, error = self.servo.ReadPos(self._servo_id)
@@ -131,7 +145,8 @@ class DobotGripper:
             if error != 0:
                 failure_types.append("servo/device error")
             failures = " and ".join(failure_types)
-            raise ValueError(
+            failure_class = GripperReadTimeout if result == COMM_RX_TIMEOUT and error == 0 else ValueError
+            raise failure_class(
                 f"ReadPos failed for servo ID {self._servo_id}: {failures} "
                 f"(comm_result={result}, servo_error={error})"
             )
@@ -141,6 +156,7 @@ class DobotGripper:
         return localPos
 
     # dobot
+    @serial_transaction
     def move(self, position: int, speed: int, force: int) -> Tuple[bool, int]:
         """  这里应该有 转换公式,将位置 力  速度等信息转换未舵机的数据！ """
         if position > self._max_position or position < self._min_position:
@@ -155,7 +171,14 @@ class DobotGripper:
         # print("write pos ", localPos)
         # print("write spd ", localSpd)
 
-        return self.servo.WritePosEx(self._servo_id, localPos, localSpd, 0)
+        result, error = self.servo.WritePosEx(self._servo_id, localPos, localSpd, 0)
+        if result != COMM_SUCCESS or error != 0:
+            raise RuntimeError(
+                f"WritePosEx failed for servo ID {self._servo_id} on {self.port}: "
+                f"comm_result={result}, servo_error={error}; "
+                "motion may already have been sent, do not retry automatically"
+            )
+        return result, error
 
 
 def main():

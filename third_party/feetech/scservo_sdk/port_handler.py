@@ -6,7 +6,9 @@ import sys
 import platform
 
 DEFAULT_BAUDRATE = 1000000
-LATENCY_TIMER = 20  # 应答超时 的时间
+# Windows USB/serial scheduling can delay a reply beyond the original 20ms
+# during inference and camera capture. This only bounds receive waiting.
+LATENCY_TIMER = 50 if sys.platform == 'win32' else 20
 
 class PortHandler(object):
     def __init__(self, port_name):

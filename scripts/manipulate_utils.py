@@ -4,10 +4,11 @@ import configparser
 from dobot_control.agents.dobot_agent import DobotRobotConfig
 import os
 from pathlib import Path
+from dobot_control.config import config_path as get_config_path
 from dataclasses import dataclass
 
 from scripts.function_util import wait_period, log_write
-from task_skills.layout import physical_nova_home_degrees
+from dobot_control.layout import TELEOP_NOVA_SIDES, physical_nova_home_degrees
 
 
 def set_light(env, which_color, which_status):
@@ -28,7 +29,7 @@ def set_light(env, which_color, which_status):
 
 def load_ini_data_camera():
     camera_dict = {"top": None, "left": None, "right": None}
-    ini_file_path = str(Path(__file__).parent) + "/dobot_config/dobot_settings.ini"
+    ini_file_path = str(get_config_path())
     ini_file = configparser.ConfigParser()
     ini_file.read(ini_file_path)
     for _cam in camera_dict.keys():
@@ -36,7 +37,7 @@ def load_ini_data_camera():
     return camera_dict
 
 def load_ini_data_hands():
-    ini_file_path = str(Path(__file__).parent) + "/dobot_config/dobot_settings.ini"
+    ini_file_path = str(get_config_path())
     ini_file = configparser.ConfigParser()
     ini_file.read(ini_file_path)
 
@@ -63,7 +64,7 @@ class GripperConfig:
 
 
 def load_ini_data_gripper():
-    ini_file_path = str(Path(__file__).parent) + "/dobot_config/dobot_settings.ini"
+    ini_file_path = str(get_config_path())
     ini_file = configparser.ConfigParser()
     ini_file.read(ini_file_path)
 
@@ -76,7 +77,9 @@ def load_ini_data_gripper():
 
 # robot init move
 _SAFE_POSE_INIT_ENV = "DOBOT_ALLOW_SAFE_POSE_INIT"
-_SAFE_POSE_INIT_STEP_RAD = float(os.environ.get("DOBOT_SAFE_POSE_STEP_RAD", "0.02"))
+# Per-joint startup match tolerance, with only a floating-point roundoff margin.
+_SAFE_POSE_MATCH_TOL_RAD = np.deg2rad(0.1) + 1e-12
+_SAFE_POSE_INIT_STEP_RAD = float(os.environ.get("DOBOT_SAFE_POSE_STEP_RAD", "0.008"))
 _SAFE_POSE_INIT_PERIOD_S = float(os.environ.get("DOBOT_SAFE_POSE_PERIOD_S", "0.05"))
 _SAFE_POSE_INIT_SERVO_T_S = float(os.environ.get("DOBOT_SAFE_POSE_SERVO_T_S", "0.05"))
 
@@ -91,12 +94,13 @@ def _print_pose_check(curr_joints, target_joints, label):
     target_deg = np.rad2deg(target_arm)
     delta_deg = target_deg - curr_deg
     print(f"[POSE CHECK] {label}")
-    print("  current_arm_deg =", np.round(curr_deg, 2).tolist())
-    print("  target_arm_deg  =", np.round(target_deg, 2).tolist())
-    print("  delta_arm_deg   =", np.round(delta_deg, 2).tolist())
+    print("  current_arm_deg =", np.round(curr_deg, 4).tolist())
+    print("  target_arm_deg  =", np.round(target_deg, 4).tolist())
+    print("  delta_arm_deg   =", np.round(delta_deg, 6).tolist())
     print("  gripper_current =", np.round([curr_joints[6], curr_joints[13]], 4).tolist())
     print("  gripper_target  =", np.round([target_joints[6], target_joints[13]], 4).tolist())
-    print("  max_arm_delta_deg =", round(float(np.max(np.abs(delta_deg))), 2))
+    print("  max_arm_delta_deg =", round(float(np.max(np.abs(delta_deg))), 6))
+    print("  match_tolerance_deg = 0.1")
 
 
 def _safe_pose_segment(env, curr_joints, target_joints, label):
@@ -104,8 +108,8 @@ def _safe_pose_segment(env, curr_joints, target_joints, label):
     curr_arm = np.concatenate([curr_joints[:6], curr_joints[7:13]])
     target_arm = np.concatenate([target_joints[:6], target_joints[7:13]])
     max_delta = float(np.max(np.abs(curr_arm - target_arm)))
-    if max_delta <= 1e-6:
-        print(f"[SAFE POSE INIT] {label}: six-axis pose already matches; no motion sent.", flush=True)
+    if max_delta <= _SAFE_POSE_MATCH_TOL_RAD:
+        print(f"[SAFE POSE INIT] {label}: six-axis pose within 0.1 deg tolerance; no motion sent.", flush=True)
         return
     # Preserve the current gripper commands. Pose initialization must not
     # open/close either gripper as a side effect of arm interpolation.
@@ -133,8 +137,8 @@ def robot_pose_init(env):
     pose check that aborts before any initialization motion.
     """
     reset_1 = np.deg2rad([
-        *physical_nova_home_degrees("left"), 0,
-        *physical_nova_home_degrees("right"), 0,
+        *physical_nova_home_degrees(TELEOP_NOVA_SIDES[0]), 0,
+        *physical_nova_home_degrees(TELEOP_NOVA_SIDES[1]), 0,
     ])
     reset_2 = reset_1.copy()
 
@@ -145,8 +149,8 @@ def robot_pose_init(env):
     curr_arm = np.concatenate([curr_joints[:6], curr_joints[7:13]])
     target_arm = np.concatenate([reset_1[:6], reset_1[7:13]])
     max_arm_delta = float(np.max(np.abs(curr_arm - target_arm)))
-    if max_arm_delta <= 1e-6:
-        print("[SAFE POSE INIT] six-axis pose already matches target; no motion sent.", flush=True)
+    if max_arm_delta <= _SAFE_POSE_MATCH_TOL_RAD:
+        print("[SAFE POSE INIT] six-axis pose within 0.1 deg tolerance; no motion sent.", flush=True)
         return
 
     if os.environ.get(_SAFE_POSE_INIT_ENV) != "1":
@@ -177,23 +181,16 @@ def obs_action_check(env, agent):
         return 1, action
 
 
-# Master-to-Nova channel conversion.
-# The requested physical wiring is crossed: left master -> right Nova and
-# right master -> left Nova. Their verified startup poses already match in
-# this crossed pairing, so no additional sign inversion is applied here.
+# Master-to-Nova conversion: HAND_LEFT, HAND_RIGHT -> RIGHT .1, LEFT .2.
+# Each calibrated seven-entry half (six joints + gripper) is swapped once.
 
 
 def master_to_nova_action(action):
-    """Convert master order to crossed Nova target order.
+    """Map config master order to the calibrated Nova vector order.
 
-    Master order: left, right.
-    Nova target order: left Nova, right Nova.
-    Physical wiring requires: right master -> left Nova and
-    left master -> right Nova. Gripper entries stay normalized [0, 1].
-    Their verified startup poses match in this crossed pairing (left master
-    and right Nova both start at ~[-90,0,-90,0,+90,+90] deg; right master and
-    left Nova both start at ~[+90,0,+90,0,-90,-90] deg), so no sign inversion
-    is applied here. A direct straight-through mapping would flip J3/J5/J6.
+    Input: HAND_LEFT (COM6), HAND_RIGHT (COM5).
+    Output: RIGHT Nova .1 <- HAND_RIGHT, LEFT Nova .2 <- HAND_LEFT.
+    Keep calibrated absolute joints and normalized [0, 1] gripper values.
     """
     action = np.asarray(action, dtype=float).copy()
     if action.shape != (14,):
@@ -202,8 +199,7 @@ def master_to_nova_action(action):
     master_left = action[:7].copy()
     master_right = action[7:14].copy()
 
-    # Output is target order: left Nova <- right master,
-    # right Nova <- left master.
+    # Output order is physical RIGHT .1, LEFT .2.
     return np.concatenate([master_right, master_left])
 
 
@@ -216,11 +212,11 @@ def master_to_nova_flags(master_flags):
 
 
 def master_to_nova_gripper_flags(master_flags):
-    """Keep gripper flags on the same physical left/right side."""
+    """Route gripper enables to the same Nova slot as each master's arm."""
     flags = np.asarray(master_flags).copy()
     if flags.shape != (2,):
         raise ValueError(f"Expected two master flags, got shape {flags.shape}")
-    return flags
+    return flags[::-1]
 
 
 def apply_same_side_gripper_targets(
@@ -229,7 +225,7 @@ def apply_same_side_gripper_targets(
     last_action,
     gripper_flags,
 ):
-    """Apply physical same-side master grippers to Nova target channels."""
+    """Use the gripper target already mapped to each Nova slot."""
     result = np.asarray(action, dtype=float).copy()
     crossed_master_action = np.asarray(crossed_master_action, dtype=float)
     last_action = np.asarray(last_action, dtype=float)
@@ -241,11 +237,11 @@ def apply_same_side_gripper_targets(
     if flags.shape != (2,):
         raise ValueError(f"Expected two gripper flags, got shape {flags.shape}")
 
-    # crossed_master_action[13] is the physical left master gripper;
-    # crossed_master_action[6] is the physical right master gripper.
+    # master_to_nova_action already swapped both complete seven-entry halves.
+    # A second gripper-only swap would send each target to the opposite arm.
     for target_index, source_index, enabled in (
-        (6, 13, bool(flags[0])),
-        (13, 6, bool(flags[1])),
+        (6, 6, bool(flags[0])),
+        (13, 13, bool(flags[1])),
     ):
         result[target_index] = (
             np.clip(crossed_master_action[source_index], 0.0, 1.0)

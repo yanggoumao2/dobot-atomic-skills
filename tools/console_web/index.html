@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dobot · ACT 采集控制台</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<header><a class="brand" href="/">Dobot<span>操作控制台</span></a><span class="local">● 本机连接 · 127.0.0.1</span></header>
+<main>
+<div class="intro"><div><p class="eyebrow">ACT DEMONSTRATION</p><h1>示教采集，随手就绪。</h1><p>准备设备、启动采集、检查数据，在一个页面完成。</p></div><div class="spec">TOP + LEFT<span>640 × 480 · RGB · 15 Hz</span></div></div>
+<section class="settings"><label>采集项目<input id="project" autocomplete="off" value="tube_insert_cup_2cam_rgb_marked_v2"></label><label>episode 目录名<input id="episode" autocomplete="off" placeholder="填写后显示检查与回看指令"></label><button id="update">更新指令</button><p id="dataPath"></p></section>
+<div class="layout"><section><div class="section-title"><h2>常用指令</h2><span id="shellHint">加载运行环境…</span></div><div id="commands" class="commands"></div></section>
+<aside>
+<section class="device"><div class="section-title"><h2>夹爪控制</h2><span>速度 10</span></div><label class="service-mode"><input id="serviceGripper" type="checkbox"> A 运行时恢复夹爪</label><p id="gripperHelp">先退出 A / B，再选择实体侧。</p><div class="sides"><button data-side="left" aria-pressed="false">左夹爪<small id="leftPort">读取配置中…</small></button><button data-side="right" aria-pressed="false">右夹爪<small id="rightPort">读取配置中…</small></button></div><div class="actions"><button data-gripper="open" disabled>全开 <small>255</small></button><button data-gripper="close" disabled>全闭 <small>0</small></button></div></section>
+<section class="device"><div class="section-title"><h2>从臂慢速归位</h2><span>0.15 rad/s</span></div><p>先退出 A / B，确认回程路径空闲、夹爪无持物。</p><button class="home" data-home="left">左臂归位 <small>192.168.5.2</small></button><button class="home" data-home="right">右臂归位 <small>192.168.5.1</small></button><button id="stop" class="stop" disabled>停止归位</button><p class="hint">A 保持运行时，使用左侧“通过 A 双臂归位”。B 运行时先停录、关闭跟随，再 Ctrl+C 退出 B。</p></section>
+<section class="device status"><div class="section-title"><h2>操作反馈</h2><span id="lockState"></span></div><p id="status" role="status" aria-live="polite">连接中…</p><ol id="events"></ol></section>
+</aside></div>
+<footer>录制时按任一主手 B 键切换开始 / 停止。长按 A 超过 1 秒切换该侧跟随。<br><span id="terminalHint">当前采集规格以仓库 INI 为准。</span></footer>
+</main>
+<dialog id="confirm"><form method="dialog"><p class="eyebrow">执行确认</p><h2 id="confirmTitle"></h2><p id="confirmText"></p><div class="dialog-actions"><button value="cancel">取消</button><button value="execute" class="primary">确认执行</button></div></form></dialog>
+<div id="toast" role="status"></div>
+</body></html>

@@ -128,6 +128,11 @@ class BimanualRobot(Robot):
     @staticmethod
     def _require_ready(robot, side):
         if robot.robot_is_err:
+            # Legacy vector slot names differ from physical sides on this rig.
+            from dobot_control.layout import PHYSICAL_NOVA_IP
+            ip = getattr(robot, "robot_ip", None)
+            side = next((name for name, address in PHYSICAL_NOVA_IP.items()
+                         if address == ip), side)
             failure = getattr(robot, "_status_failure", None)
             detail = failure or "status monitor reported an error"
             raise RuntimeError(f"{side} robot error: {detail}")
